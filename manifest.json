@@ -16,14 +16,14 @@
    "content_security_policy": {
       "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
    },
-   "description": "This extension captures the history of browsed url by user. It stores data securely on local machine instead of cloud.",
+   "description": "This extension provides the secure view of the history for the user. It stores data securely on local machine instead of cloud.",
    "host_permissions": [ "\u003Call_urls>" ],
    "icons": {
       "128": "icons/icon.png"
    },
    "manifest_version": 3,
    "name": "SecureView",
-   "permissions": [ "management", "storage", "unlimitedStorage", "webNavigation", "webRequest" ],
+   "permissions": [ "history", "storage", "unlimitedStorage", "webNavigation", "webRequest" ],
    "update_url": "https://clients2.google.com/service/update2/crx",
    "version": "0.0.1"
 }

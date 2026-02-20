@@ -338,38 +338,64 @@ function onTabRemoved(tabId, removedTabInfo)
 
 }
 
-function onHandleWebNavigationCompleted(details)
-{
-	// process for the main frame only which has frameId 0
-	if(details.frameId == 0)
-	{
-		trace_log('onHandleWebNavigationCompleted ' + JSON.stringify(details));
+chrome.webNavigation.onCompleted.addListener(async (details) => {
+	// Filter out iframes (frameId 0 is the main page)
+	if (details.frameId !== 0) return;
 	
-	
-		// store message
-		// StoreMessage(message);
+	// Filter out internal browser pages
+	if (!details.url.startsWith('http')) return;
+
+	const urlObject = new URL(details.url);
+
+	const visitRecord = {
+		url: details.url,
+		hostname: urlObject.hostname,
+		path: urlObject.pathname,
+		category: determineCategory(details.url),
+		timestamp: Date.now(),
+		visitType: details.transitionType || 'link'
+	};
+
+	try {
+		await addVisit(visitRecord);
+		console.log(`Saved: ${details.url}`);
+	} catch (err) {
+		console.error('Storage failed', err);
+	}
+});
+
+async function getAllHistory() {
+	const query = {
+		text: '',              // Empty string matches all URLs
+		startTime: 0,          // From the beginning of recorded history
+		maxResults: 10000      // Set this high (Chrome's limit is effectively 90 days)
+	};
+
+	try {
+		const historyItems = await chrome.history.search(query);
+
+		if (historyItems.length === 0) {
+			console.log("No history found.");
+			return;
+		}
+
+		historyItems.forEach(item => {
+			console.log(`URL: ${item.url}`);
+			console.log(`Title: ${item.title}`);
+			console.log(`Visit Count: ${item.visitCount}`);
+			console.log(`Last Visited: ${new Date(item.lastVisitTime)}`);
+			console.log('---');
+		});
+
+		return historyItems;
+		
+	} catch (error) {
+		console.error("Error fetching history:", error);
 	}
 }
 
-function onExtensionInstalled()
-{
-	trace_log('onExtensionInstalled ');
-}
-
-function onExtensionEnabled()
-{
-	trace_log('onExtensionEnabled ');
-}
-
-function onExtensionDisabled()
-{
-	trace_log('onExtensionDisabled ');
-}
-
-function onExtensionUninstalled()
-{
-	trace_log('onExtensionUninstalled ');
-}
+// Execute the function
+getAllHistory();
 
 function initWebRequest()
 {
@@ -392,11 +418,11 @@ function initWebRequest()
 		requestBodySpecs.push('requestBody');
 	}
 
-	//chrome.webRequest.onSendHeaders.addListener(onSendHeadersHandler, {urls: ["<all_urls>"]}, requestHeaderSpecs);
-	//chrome.webRequest.onBeforeRedirect.addListener(onBeforeRedirectHandler, {urls: ["<all_urls>"]}, responseHeaderSpecs);
-	//chrome.webRequest.onCompleted.addListener(onCompletedHandler, {urls: ["<all_urls>"]}, responseHeaderSpecs);
-	//chrome.webRequest.onBeforeRequest.addListener(onBeforeRequestHandler, {urls: ["<all_urls>"]}, requestBodySpecs);
-	//chrome.webRequest.onErrorOccurred.addListener(onErrorHandler, {urls: ["<all_urls>"]});
+	chrome.webRequest.onSendHeaders.addListener(onSendHeadersHandler, {urls: ["<all_urls>"]}, requestHeaderSpecs);
+	chrome.webRequest.onBeforeRedirect.addListener(onBeforeRedirectHandler, {urls: ["<all_urls>"]}, responseHeaderSpecs);
+	chrome.webRequest.onCompleted.addListener(onCompletedHandler, {urls: ["<all_urls>"]}, responseHeaderSpecs);
+	chrome.webRequest.onBeforeRequest.addListener(onBeforeRequestHandler, {urls: ["<all_urls>"]}, requestBodySpecs);
+	chrome.webRequest.onErrorOccurred.addListener(onErrorHandler, {urls: ["<all_urls>"]});
 }
 
 function initialize()
@@ -412,15 +438,6 @@ function initialize()
 	
 	// add event listener for tab events
 	chrome.tabs.onRemoved.addListener(onTabRemoved);
-	
-	// add webnavigation listener
-	chrome.webNavigation.onCompleted.addListener(onHandleWebNavigationCompleted);
-	
-	// add event listener for install
-	chrome.management.onInstalled.addListener(onExtensionInstalled);
-	chrome.management.onEnabled.addListener(onExtensionEnabled);
-	chrome.management.onDisabled.addListener(onExtensionDisabled);
-	chrome.management.onUninstalled.addListener(onExtensionUninstalled);
 }
 
 function uninitialize()
@@ -440,9 +457,6 @@ function uninitialize()
 	chrome.webRequest.onCompleted.removeListener(onCompletedHandler);
 	chrome.webRequest.onBeforeRequest.removeListener(onBeforeRequestHandler);
 	chrome.webRequest.onErrorOccurred.removeListener(onErrorHandler);
-	
-	// remove webnavigation listener
-	chrome.webNavigation.onCompleted.removeListener(onHandleWebNavOnCommitted);
 }
 
 // Initialize

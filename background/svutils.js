@@ -1,4 +1,5 @@
 // have all the utilities methods
+var bLogEnabled = true;
 
 // console enable to log
 function trace_log(strLog, bError)
@@ -48,3 +49,9 @@ function isSecure(url)
 	return (url.toLowerCase().substring(0, 5) === 'https' ? true : false);
 }
 
+// determins the category of website
+function determineCategory(url)
+{
+	// based on the url, find out the category
+	return 'unknown';
+}
