@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SecureView</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <img class="logo" src="../icons/icon.png" alt="SecureView" />
+        <a class="title" href="https://www.websaleem.com/secureview" target="_blank" rel="noopener">
+          <span id="header-title"></span><span id="header-version"></span>
+        </a>
+      </div>
+      <div class="header-right">
+        <span class="date" id="today-date"></span>
+        <button class="icon-btn" id="history-btn" title="History">📅</button>
+        <button class="icon-btn" id="settings-btn" title="Settings">⚙️</button>
+        <button class="icon-btn" id="clear-btn" title="Clear today's data">🗑</button>
+      </div>
+    </div>
+
+    <!-- Summary bar -->
+    <div class="summary-bar">
+      <div class="summary-item">
+        <span class="summary-value" id="total-time">0m</span>
+        <span class="summary-label">Total Active</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-item">
+        <span class="summary-value" id="site-count">0</span>
+        <span class="summary-label">Sites Visited</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-item">
+        <span class="summary-value" id="top-category">—</span>
+        <span class="summary-label">Top Category</span>
+      </div>
+    </div>
+
+    <!-- View toggle -->
+    <div class="view-toggle">
+      <button class="toggle-btn active" id="btn-categories" data-view="categories">By Category</button>
+      <button class="toggle-btn" id="btn-sites" data-view="sites">By Site</button>
+    </div>
+
+    <!-- Current page indicator -->
+    <div class="current-page" id="current-page" style="display:none;">
+      <span class="current-dot" id="current-dot"></span>
+      <span class="current-label">Now:</span>
+      <span class="current-url" id="current-url-text"></span>
+      <span class="current-category" id="current-category-badge"></span>
+      <button class="block-site-btn" id="block-current-btn" title="Exclude this site and clear its tracking data">🚫</button>
+    </div>
+
+    <!-- Categories view -->
+    <div class="view-panel" id="view-categories">
+      <div id="category-list" class="category-list">
+        <div class="empty-state">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">No browsing data yet</div>
+          <div class="empty-sub">Start browsing to see your stats</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sites view -->
+    <div class="view-panel hidden" id="view-sites">
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="🔎  Filter sites..." />
+      </div>
+      <div id="site-list" class="site-list">
+        <div class="empty-state">
+          <div class="empty-icon">🌐</div>
+          <div class="empty-text">No sites visited yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <a class="privacy-link" href="https://www.websaleem.com/secureview/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+      <span class="footer-sep">|</span>
+      <a class="privacy-link" href="https://www.websaleem.com/secureview/terms.html" target="_blank" rel="noopener">Terms of Service</a>
+      <span class="footer-sep">|</span>
+      <span class="footer-reset"><sup>*</sup>Data resets midnight</span>
+    </div>
+  </div>
+
+  <!-- Settings overlay -->
+  <div class="settings-overlay hidden" id="settings-overlay">
+    <div class="settings-panel">
+      <div class="settings-header">
+        <span>⚙️ Settings</span>
+        <button class="close-btn" id="close-settings">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Debug Logging</div>
+            <div class="setting-desc">Print detailed logs to the extension console</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-debug-log" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </label>
+        </div>
+        <div class="setting-divider"></div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Always use AI Classification</div>
+            <div class="setting-desc">Skip rule-based matching and always call AI categorization for every site</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="setting-force-cf" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </label>
+        </div>
+        <div class="setting-divider"></div>
+        <div class="setting-section">
+          <div class="setting-section-header">
+            <div class="setting-label">Excluded Domains</div>
+            <div class="setting-desc">Sites in this list will not be tracked</div>
+          </div>
+          <div class="exclusion-input-row">
+            <input type="text" id="exclusion-input" placeholder="e.g. facebook.com" spellcheck="false" />
+            <button id="exclusion-add-btn">Add</button>
+          </div>
+          <div id="exclusion-list" class="exclusion-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- History overlay -->
+  <div class="history-overlay hidden" id="history-overlay">
+    <div class="history-panel">
+      <div class="history-header">
+        <span>📅 Browsing History</span>
+        <button class="close-btn" id="close-history">✕</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
+
+  <script src="../shared/logger.js"></script>
+  <script src="../shared/categories.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

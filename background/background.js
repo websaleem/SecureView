@@ -1,456 +1,327 @@
-// import other files
-importScripts('./svdb.js', './svutils.js');
+// SecureView Background Service Worker
+// Tracks active browsing time per URL/domain
 
-// set the default browser name
-var browserName = 'Google Chrome';
+importScripts("../shared/categories.js");
+importScripts("../shared/categorizer.js");
+importScripts("../shared/logger.js");
 
-try {
-	// update the browser name based on brand
-	if(navigator.userAgentData.brands.length > 0)
-	{
-		// set for Microsoft edge
-		browserName = navigator.userAgentData.brands[1].brand;
-		
-		trace_log('Browser name: ' + browserName);
-	}
-} catch (err) {
-	// exception 
-	trace_log('Failed to get the browser name, use default. Error ' + err, true);
-}
+const LOG = "BACKGROUND";
 
-// Load local storage everytime background script runs
-chrome.storage.local.get().then((items) => {
-	// load uid value
-	if(items["uid"] != undefined)
-		strUidValue = items["uid"];
+// Load debug config immediately so logs work before the first alarm/event fires
+Logger.init();
+
+// ─── In-memory state (re-hydrated from storage.session on every SW wake) ──────
+let currentUrl = null;
+let activeTabId = null;
+let sessionStart = null;
+let isWindowFocused = true;
+let isUserIdle = false;
+let stateLoaded = false;
+
+const SESSION_KEY          = "sv_session";
+const IDLE_THRESHOLD_SECONDS = 60;
+const EXCLUDED_DOMAINS_KEY = "excluded_domains";
+
+// ─── Excluded domains (in-memory, synced from storage) ───────────────────────
+let _excludedDomains = new Set();
+chrome.storage.local.get([EXCLUDED_DOMAINS_KEY], (result) => {
+  _excludedDomains = new Set(result[EXCLUDED_DOMAINS_KEY] || []);
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && EXCLUDED_DOMAINS_KEY in changes) {
+    _excludedDomains = new Set(changes[EXCLUDED_DOMAINS_KEY].newValue || []);
+    Logger.info(LOG, `Excluded domains updated: ${[..._excludedDomains].join(", ") || "none"}`);
+  }
 });
 
-
-async function StoreMessage(message)
-{
-	// add browser type and timestamp to each message
-	message.browser_name = browserName;
-
-	message.timestamp = new Date().getTime();
-
-	trace_log('StoreMessage' + JSON.stringify(message));
+function isExcluded(url) {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    return _excludedDomains.has(hostname);
+  } catch { return false; }
 }
 
-// send message when a window is created
-function onWindowCreated(Window) 
-{
-  
+// ─── Session state persistence (survives SW restarts within browser session) ──
+
+async function loadState() {
+  if (stateLoaded) return;
+  return new Promise((resolve) => {
+    chrome.storage.session.get([SESSION_KEY], (result) => {
+      const s = result[SESSION_KEY];
+      if (s) {
+        currentUrl = s.currentUrl ?? null;
+        activeTabId = s.activeTabId ?? null;
+        sessionStart = s.sessionStart ?? null;
+        isWindowFocused = s.isWindowFocused ?? true;
+        isUserIdle = s.isUserIdle ?? false;
+      }
+      stateLoaded = true;
+      Logger.debug(LOG, "State loaded", { currentUrl, isWindowFocused, isUserIdle });
+      resolve();
+    });
+  });
 }
 
-// send message when a window is removed
-function onWindowRemoved(WindowId) 
-{
-
+function persistState() {
+  chrome.storage.session.set({
+    [SESSION_KEY]: { currentUrl, activeTabId, sessionStart, isWindowFocused, isUserIdle }
+  });
 }
 
-// function will reload extension immediately.
-function onUpdateReload()
-{
-	// reload the extension
-	chrome.runtime.reload();
+// ─── Browsing data storage ────────────────────────────────────────────────────
+
+function getTodayKey() {
+  const now = new Date();
+  return `data_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}_${String(now.getDate()).padStart(2, "0")}`;
 }
 
-// function handling messages
-function onMessageClient(message)
-{
-	// process the messages based on message type
-	switch(message.message_type)
-	{
-		// handle the config response
-		case 'response_config':
-		{
-			if(message.enabled_debug)
-				bLogEnabled = message.enabled_debug;
-
-			if(strUidValue === '' && typeof message.uid != undefined)
-			{
-				strUidValue = message.uid;
-				chrome.storage.local.set({ "uid": strUidValue }).then(() => {
-					trace_log('uid ' + strUidValue + ' stored in the local strorage.');
-				});
-			}
-
-			if(message.enabled)
-				
-			
-			trace_log('onMessageClient: RESPONSE_CONFIG ' + JSON.stringify(message) );
-			
-			// process extension status ping
-			processExtensionStatusPing();
-
-			break;
-		}
-		// this sets the uninstall url, if user manually uninstall extensions, this will be opened
-		case 'uninstall_url':
-		{
-			trace_log('onMessageClient: SET_UNINSTALL_URL. Message ' + + JSON.stringify(message));
-			if(message.uninstall_url != 'undefined')
-				chrome.runtime.setUninstallURL({url: message.uninstall_url});
-		}
-		// send any other messages directly to server
-		default: 
-		{
-			trace_log('onMessageClient: Received unknown message type ' + message.message_type, true);
-		}
-	}
+async function getStorageData() {
+  const key = getTodayKey();
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (result) => {
+      resolve(result[key] || { domains: {}, categories: {}, totalSeconds: 0 });
+    });
+  });
 }
 
-// function handling messages from content script
-function onMessageHandler(request, sender, sendResponse)
-{
-	if((sender.tab == undefined || sender.tab.id == chrome.tabs.TAB_ID_NONE) && sender.id != chrome.runtime.id)
-	{
-		sendResponse(true);
-		return;
-	}
-
-	// process the messages based on message type
-	switch(request.message_type)
-	{
-		// handling get config request
-		case 'request_config':
-		{
-			// config request by content script
-			var message = new Object();
-			message.bLogEnabled = bLogEnabled;
-			
-			sendResponse(message);
-			return;
-		}
-		// handling process specifics related to page_data 
-		case 'page_load':
-		{
-			// check if its main frame
-			if(sender.frameId == 0)
-			{
-				// add tab info
-				request.tab_id = sender.tab.id;
-				request.frame_id = sender.frameId;
-				request.document_id = sender.documentId;
-
-				// set is_complete true.
-				request.is_complete = true;
-
-				// assign a new unique id
-				request.id = getUniqueId();
-				
-				trace_log('onMessageHandler: Page_load. Assign unique id: ' + request.id + ' for url ' + JSON.stringify(sender));
-
-				// store message
-				StoreMessage(request);
-			}
-
-			break;
-		}
-		case 'page_unload':
-		{
-			// check if its main frame
-			if(sender.frameId == 0)
-			{
-				// add tab info
-				request.tab_id = sender.tab.id;
-				request.frame_id = sender.frameId;
-				request.document_id = sender.documentId;
-
-				// set is_complete true.
-				request.is_complete = true;
-
-				// assign a new unique id
-				request.id = getUniqueId();
-				
-				trace_log('onMessageHandler: Page_unload. Assign unique id: ' + request.id + ' for url ' + JSON.stringify(sender));
-
-				// store message
-				StoreMessage(request);
-			}
-			
-			break;
-		}
-		// send any other messages directly to server
-		default: 
-		{
-			// add tab info
-			request.tab_id = sender.tab.id;
-
-			// store message
-			StoreMessage(request);
-		}
-	}
-	// send response to content script
-	sendResponse(true);
+async function saveStorageData(data) {
+  const key = getTodayKey();
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [key]: data }, resolve);
+  });
 }
 
-// add event listenr to make sure the extension updates sooner than at restart of chrome
-chrome.runtime.onUpdateAvailable.addListener(onUpdateReload);
+// ─── Time accumulation ────────────────────────────────────────────────────────
 
-// add an event listener to receive messages from content script
-chrome.runtime.onMessage.addListener(onMessageHandler);
+async function flushTime(url) {
+  if (!url || !sessionStart || isUserIdle || !isWindowFocused || isExcluded(url)) {
+    Logger.debug(LOG, "Flush skipped", { url: url || "none", sessionStart, isUserIdle, isWindowFocused });
+    return;
+  }
 
-var FileTypeSupportTags = ["image", "font"];
+  const now = Date.now();
+  const elapsed = Math.round((now - sessionStart) / 1000);
+  if (elapsed <= 0) return;
 
-function getFileType(contentType, requestUrl)
-{
-	let contentTypeLower = contentType.toLowerCase();
-	
-	// get the file id from map content file type
-	if(mapContentFileType.has(contentTypeLower) )
-	{
-		return mapContentFileType.get(contentTypeLower);
+  // Advance the session start so the next flush doesn't double-count
+  sessionStart = now;
+  persistState();
+
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return;
+  }
+  if (!hostname) return;
+
+  const data = await getStorageData();
+  const existingTitle = data.domains[hostname]?.title || "";
+  const category = await categorizeUrlEnhanced(url, existingTitle);
+
+  Logger.info(LOG, `Flush: ${hostname} → ${elapsed}s (${category.name})`);
+
+  if (!data.domains[hostname]) {
+    data.domains[hostname] = {
+      url, hostname, title: "", seconds: 0,
+      category: category.name, categoryIcon: category.icon,
+      categoryColor: category.color, lastVisit: now
+    };
+  }
+  data.domains[hostname].seconds += elapsed;
+  data.domains[hostname].lastVisit = now;
+  data.domains[hostname].category = category.name;
+  data.domains[hostname].categoryIcon = category.icon;
+  data.domains[hostname].categoryColor = category.color;
+
+  if (!data.categories[category.name]) {
+    data.categories[category.name] = {
+      name: category.name, icon: category.icon,
+      color: category.color, seconds: 0
+    };
+  }
+  data.categories[category.name].seconds += elapsed;
+  data.totalSeconds = (data.totalSeconds || 0) + elapsed;
+
+  await saveStorageData(data);
+}
+
+// ─── Session management ───────────────────────────────────────────────────────
+
+async function endSession() {
+  if (currentUrl && sessionStart) {
+    Logger.info(LOG, `Session ended: ${currentUrl}`);
+    await flushTime(currentUrl);
+  }
+  currentUrl = null;
+  activeTabId = null;
+  sessionStart = null;
+  persistState();
+}
+
+async function switchTo(url, tabId, title) {
+  // Flush time on the previous URL before switching
+  if (currentUrl && sessionStart) {
+    await flushTime(currentUrl);
+  }
+
+  if (!url || url.startsWith("chrome-extension://") || url === "about:blank" || isExcluded(url)) {
+    currentUrl = null;
+    activeTabId = null;
+    sessionStart = null;
+    persistState();
+    return;
+  }
+
+  Logger.info(LOG, `Switch to: ${new URL(url).hostname} (tab ${tabId})`);
+
+  currentUrl = url;
+  activeTabId = tabId;
+  sessionStart = isUserIdle || !isWindowFocused ? null : Date.now();
+  persistState();
+
+  if (title) await syncTabTitle(url, title);
+}
+
+// ─── Tab title sync ───────────────────────────────────────────────────────────
+
+async function syncTabTitle(url, title) {
+  if (!url || !title) return;
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.replace(/^www\./, "");
+  } catch { return; }
+  const data = await getStorageData();
+  if (data.domains[hostname]) {
+    Logger.debug(LOG, `Title synced: ${hostname} → "${title}"`);
+    data.domains[hostname].title = title;
+    await saveStorageData(data);
+  }
+}
+
+// ─── Re-establish tracking after SW restart ───────────────────────────────────
+// Called on every alarm tick. If SW was killed and restarted, in-memory state
+// is gone — this re-queries the active tab and resumes from persisted state.
+
+async function ensureTracking() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab || !tab.url) return;
+
+    const url = tab.url;
+    if (url.startsWith("chrome-extension://") || url === "about:blank") return;
+
+    if (url !== currentUrl) {
+      Logger.info(LOG, `Tracking re-established: ${new URL(url).hostname}`);
+      await switchTo(url, tab.id, tab.title);
+    } else if (!sessionStart && !isUserIdle && isWindowFocused) {
+      // Same URL but sessionStart was lost — resume
+      Logger.debug(LOG, `Session start restored for: ${new URL(url).hostname}`);
+      sessionStart = Date.now();
+      persistState();
     }
-
-	// here means failed to get from content type, try from url
-	let urlLower = requestUrl.toLowerCase();
-	let indexQ = urlLower.indexOf('?');
-	if(indexQ != -1)
-		urlLower = urlLower.substring(0, indexQ);
-		
-	var indexOfPeriod = urlLower.lastIndexOf(".");
-	// If the period is found, look for file extension.
-	if (indexOfPeriod != -1) 
-	{
-		// Get the file extension.
-		var fileExtension = urlLower.substring(indexOfPeriod);
-
-		// get the file id from map file extension type
-		if(mapFileExtensionType.has(fileExtension) )
-		{
-			return mapFileExtensionType.get(fileExtension);
-		}
-	}
-	// return unknown as 0 if not found
- 	return 0;
+  } catch (e) {}
 }
 
-function onSendHeadersHandler(details)
-{
-	if(details.tabId == -1)
-		return;
+// ─── Event Listeners ──────────────────────────────────────────────────────────
 
-	var message = new Object();
-	message.message_type = 'request_headers';
-	message.id = details.requestId;
-	message.method = details.method;
-	message.tab_id = details.tabId;
-	message.url = details.url;
-	message.page_type = details.type;
-
-	// store message
-	StoreMessage(message);
-}
-
-function onBeforeRedirectHandler(details)
-{
-	if(details.tabId == -1)
-		return;
-
-	var message = new Object();
-	message.message_type = 'response_headers';
-	message.id = details.requestId;
-	message.method = details.method;
-	message.tab_id = details.tabId;
-	message.url = details.url;
-	message.redirect_url = details.redirectUrl;
-	message.page_type = details.type;
-	message.ip = details.ip;
-	message.status_code = details.statusCode;
-	message.status_line = details.statusLine;
-
-	// its redirected response, there will be more request with same request id
-	message.is_complete = true;
-
-	// store message
-	StoreMessage(message);
-}
-
-function onCompletedHandler(details)
-{
-	if(details.tabId == -1)
-		return;
-
-	var message = new Object();
-	message.message_type = 'response_headers';
-	message.id = details.requestId;
-	message.method = details.method;
-	message.tab_id = details.tabId;
-	message.url = details.url;
-	message.page_type = details.type;
-	message.ip = details.ip;
-	message.status_code = details.statusCode;
-	message.status_line = details.statusLine;
-
-	// this completes the request
-	message.is_complete = true;
-
-	// store message
-	StoreMessage(message);
-}
-
-function onErrorHandler(details)
-{
-	if(details.tabId == -1)
-		return;
-
-	// delete request id from stored map
-	var message = new Object();
-	message.message_type = 'response_errors';
-	message.id = details.requestId;
-	message.tab_id = details.tabId;
-	message.page_type = details.type;
-	message.url = details.url;
-	message.is_complete = true;
-
-	// store message
-	StoreMessage(message);
-}
-
-function onBeforeRequestHandler(details)
-{
-	if(details.tabId == -1 || details.method != 'POST')
-		return;
-
-	if(details.requestBody == undefined || details.requestBody.raw == undefined)
-		return;
-
-	var message = new Object();
-	message.message_type = 'post_data';
-	message.id = details.requestId;
-	message.tab_id = details.tabId;
-	message.url = details.url;
-
-	// store message
-	StoreMessage(message);
-}
-
-// callback for the tab removal
-function onTabRemoved(tabId, removedTabInfo) 
-{
-	// delay of 1 sec if just tab closing and not whole window
-	trace_log('onTabRemoved remove tabId ' + tabId);
-
-}
-
-chrome.webNavigation.onCompleted.addListener(async (details) => {
-	// Filter out iframes (frameId 0 is the main page)
-	if (details.frameId !== 0) return;
-	
-	// Filter out internal browser pages
-	if (!details.url.startsWith('http')) return;
-
-	const urlObject = new URL(details.url);
-
-	const visitRecord = {
-		url: details.url,
-		hostname: urlObject.hostname,
-		path: urlObject.pathname,
-		category: determineCategory(details.url),
-		timestamp: Date.now(),
-		visitType: details.transitionType || 'link'
-	};
-
-	try {
-		await addVisit(visitRecord);
-		console.log(`Saved: ${details.url}`);
-	} catch (err) {
-		console.error('Storage failed', err);
-	}
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  await loadState();
+  Logger.debug(LOG, `Tab activated: ${activeInfo.tabId}`);
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    if (tab?.url) await switchTo(tab.url, tab.id, tab.title);
+  } catch (e) {}
 });
 
-async function getAllHistory() {
-	const query = {
-		text: '',              // Empty string matches all URLs
-		startTime: 0,          // From the beginning of recorded history
-		maxResults: 10000      // Set this high (Chrome's limit is effectively 90 days)
-	};
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  await loadState();
+  // Accept updates from the tracked tab OR if we have no tracked tab (after SW restart)
+  if (tabId !== activeTabId && activeTabId !== null) return;
+  if (changeInfo.status === "complete" && tab.url) {
+    Logger.debug(LOG, `Tab updated: ${tab.url} (tab ${tabId})`);
+    await switchTo(tab.url, tabId, tab.title);
+  } else if (changeInfo.title && tabId === activeTabId) {
+    await syncTabTitle(currentUrl, changeInfo.title);
+  }
+});
 
-	try {
-		const historyItems = await chrome.history.search(query);
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  await loadState();
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    Logger.info(LOG, "Window lost focus — flushing and pausing");
+    isWindowFocused = false;
+    await flushTime(currentUrl);
+    sessionStart = null;
+    persistState();
+  } else {
+    Logger.info(LOG, "Window gained focus — resuming");
+    isWindowFocused = true;
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, windowId });
+      if (tab?.url) await switchTo(tab.url, tab.id, tab.title);
+    } catch (e) {}
+  }
+});
 
-		if (historyItems.length === 0) 
-		{
-			trace_log("No history found.");
-			return;
-		}
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await loadState();
+  if (tabId === activeTabId) {
+    Logger.info(LOG, `Tracked tab removed: ${tabId}`);
+    await endSession();
+  }
+});
 
-		historyItems.forEach(item => {
-			trace_log(`URL: ${item.url} Title: ${item.title} Visit Count: ${item.visitCount} Last Visited: ${new Date(item.lastVisitTime)}`);
-		});
+chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
+chrome.idle.onStateChanged.addListener(async (state) => {
+  await loadState();
+  Logger.info(LOG, `Idle state: ${state}`);
+  if (state === "idle" || state === "locked") {
+    isUserIdle = true;
+    await flushTime(currentUrl);
+    sessionStart = null;
+    persistState();
+  } else if (state === "active") {
+    isUserIdle = false;
+    if (currentUrl && isWindowFocused) {
+      sessionStart = Date.now();
+      persistState();
+    }
+  }
+});
 
-		return historyItems;
-		
-	} catch (error) {
-		trace_log("Error fetching history:", error);
-	}
+// Alarm: minimum 1 minute in Chrome MV3
+chrome.alarms.create("tick", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== "tick") return;
+  await loadState();
+  Logger.debug(LOG, "Alarm tick");
+  await ensureTracking();      // Re-establish tracking if SW was restarted
+  await flushTime(currentUrl); // Flush accumulated time to storage
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+  if (message.type === "USER_ACTIVE") {
+    loadState().then(() => {
+      Logger.debug(LOG, "USER_ACTIVE received from content script");
+      if (isUserIdle) {
+        isUserIdle = false;
+        if (currentUrl && isWindowFocused) {
+          sessionStart = Date.now();
+          persistState();
+        }
+      }
+    });
+  }
+  return false;
+});
+
+// Initial setup on install/startup
+async function init() {
+  await loadState();
+  await ensureTracking();
+  Logger.info(LOG, "Extension initialized");
 }
 
-// Execute the function
-getAllHistory();
-
-function initWebRequest()
-{
-	var requestHeaderSpecs = [];
-	if(chrome.webRequest.OnSendHeadersOptions.hasOwnProperty('EXTRA_HEADERS'))
-	{
-		requestHeaderSpecs.push('requestHeaders');
-		requestHeaderSpecs.push('extraHeaders');
-	}
-	var responseHeaderSpecs = [];
-	if(chrome.webRequest.OnCompletedOptions.hasOwnProperty('EXTRA_HEADERS'))
-	{
-		responseHeaderSpecs.push('responseHeaders');
-		responseHeaderSpecs.push('extraHeaders');
-	}
-	var requestBodySpecs = [];
-	if(chrome.webRequest.OnBeforeRequestOptions.hasOwnProperty('REQUEST_BODY'))
-	{
-		requestBodySpecs.push('extraHeaders');
-		requestBodySpecs.push('requestBody');
-	}
-
-	chrome.webRequest.onSendHeaders.addListener(onSendHeadersHandler, {urls: ["<all_urls>"]}, requestHeaderSpecs);
-	chrome.webRequest.onBeforeRedirect.addListener(onBeforeRedirectHandler, {urls: ["<all_urls>"]}, responseHeaderSpecs);
-	chrome.webRequest.onCompleted.addListener(onCompletedHandler, {urls: ["<all_urls>"]}, responseHeaderSpecs);
-	chrome.webRequest.onBeforeRequest.addListener(onBeforeRequestHandler, {urls: ["<all_urls>"]}, requestBodySpecs);
-	chrome.webRequest.onErrorOccurred.addListener(onErrorHandler, {urls: ["<all_urls>"]});
-}
-
-function initialize()
-{
-	trace_log('initialize: starting meter functionality ... ');
-
-	// add event listener for all methods
-	initWebRequest();
-
-	// add event listener for window events
-	chrome.windows.onRemoved.addListener(onWindowRemoved, {windowTypes: ['normal', 'popup']});
-	chrome.windows.onCreated.addListener(onWindowCreated, {windowTypes: ['normal', 'popup']});
-	
-	// add event listener for tab events
-	chrome.tabs.onRemoved.addListener(onTabRemoved);
-}
-
-function uninitialize()
-{
-	trace_log('uninitialize: stopping meter functionality ... ');
-	
-	// remove event listener for window events
-	chrome.windows.onRemoved.removeListener(onWindowRemoved);
-	chrome.windows.onCreated.removeListener(onWindowCreated);
-	
-	// remove event listener for tab events
-	chrome.tabs.onRemoved.removeListener(onTabRemoved);
-	
-	// remove event listener for all webRequests
-	chrome.webRequest.onSendHeaders.removeListener(onSendHeadersHandler);
-	chrome.webRequest.onBeforeRedirect.removeListener(onBeforeRedirectHandler);
-	chrome.webRequest.onCompleted.removeListener(onCompletedHandler);
-	chrome.webRequest.onBeforeRequest.removeListener(onBeforeRequestHandler);
-	chrome.webRequest.onErrorOccurred.removeListener(onErrorHandler);
-}
-
-// Initialize
-initialize();
+chrome.runtime.onInstalled.addListener(init);
+chrome.runtime.onStartup.addListener(init);

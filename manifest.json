@@ -1,23 +1,34 @@
 {
-   "action": {
-      "default_icon": "icons/icon.png",
-      "default_title": "SecureView",
-	  "default_popup": "background/popup.html"
-   },
-   "background": {
-      "service_worker": "background/background.js"
-   },
-   "content_security_policy": {
-      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
-   },
-   "description": "This extension provides the secure view of the history for the user. It stores data securely on local machine instead of cloud.",
-   "host_permissions": [ "\u003Call_urls>" ],
-   "icons": {
-      "128": "icons/icon.png"
-   },
-   "manifest_version": 3,
-   "name": "SecureView",
-   "permissions": [ "history", "storage", "webNavigation", "webRequest" ],
-   "update_url": "https://clients2.google.com/service/update2/crx",
-   "version": "0.0.2"
+  "manifest_version": 3,
+  "name": "SecureView",
+  "version": "1.0.0",
+  "description": "Track active time and auto-categorize sites into 11 categories using AI and review your daily history in one unified dashboard.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "idle"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": "icons/icon.png"
+  },
+  "icons": {
+    "16": "icons/icon.png",
+    "32": "icons/icon.png",
+    "48": "icons/icon.png",
+    "128": "icons/icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["shared/logger.js", "content/content_script.js"]
+    }
+  ]
 }
