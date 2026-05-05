@@ -181,6 +181,25 @@ const CATEGORY_RULES = [
   }
 ];
 
+// True if `keyword` appears in `hostname` aligned to a label boundary —
+// either at the start of the hostname / a label, or before a label/path break.
+// Both inputs must already be lowercase. Scans every occurrence so a
+// late aligned hit (e.g. "sale" in "mywebsaleem.sale.com") isn't missed
+// just because an earlier mid-label one was.
+function hostnameMatchesKeyword(hostname, keyword) {
+  let idx = hostname.indexOf(keyword);
+  while (idx !== -1) {
+    const before = idx === 0 ? "^" : hostname[idx - 1];
+    const afterIdx = idx + keyword.length;
+    const after = afterIdx === hostname.length ? "$" : hostname[afterIdx];
+    const startBoundary = before === "^" || before === "." || before === "-";
+    const endBoundary   = after  === "$" || after  === "." || after  === "-";
+    if (startBoundary || endBoundary) return true;
+    idx = hostname.indexOf(keyword, idx + 1);
+  }
+  return false;
+}
+
 function categorizeUrl(url) {
   if (!url || url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url === "about:blank") {
     return { name: "System", icon: "⚙️", color: "#95A5A6" };
@@ -200,10 +219,17 @@ function categorizeUrl(url) {
       }
     }
 
-    // Keyword matching in hostname
+    // Keyword matching in hostname.
+    // Keyword must align to a label boundary (start/end of hostname or a `.`/`-`)
+    // so substrings inside unrelated names don't trigger false positives.
+    // Examples:
+    //   "news"  matches "news.com", "mynews.com", "online-news.com", "ndtv.news"
+    //   "sale"  does NOT match "websaleem.com" (the bug this guard fixes)
+    //   "shop"  matches "shop.com", "online-shop.com", "shopstyle.com"
+    //   "shop"  does NOT match "bishopusa.com"
     for (const category of CATEGORY_RULES) {
       for (const keyword of category.keywords) {
-        if (hostname.includes(keyword)) {
+        if (hostnameMatchesKeyword(hostname, keyword)) {
           return { name: category.name, icon: category.icon, color: category.color };
         }
       }
