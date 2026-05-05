@@ -63,6 +63,10 @@ jobs:
     needs: publish
     if: always()
     runs-on: ubuntu-latest
+    # Run JS actions on Node 24 ahead of GitHub's June 2026 forced upgrade,
+    # so dawidd6/action-send-mail's Node 20 deprecation warning goes away.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Send deployment email
         uses: dawidd6/action-send-mail@v4
