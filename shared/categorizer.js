@@ -35,27 +35,31 @@ chrome.storage.onChanged.addListener((changes, area) => {
 const MAX_RETRIES      = 2;
 const RETRY_BASE_MS    = 500;  // exponential backoff: 500 ms, 1000 ms
 
-// ─── Environment config ───────────────────────────────────────────────────────
-// Environment is derived from the extension name in manifest.json at runtime.
-// Names containing "beta" (case-insensitive) → beta env, otherwise → prod env.
-
-const ACTIVE_ENV = chrome.runtime.getManifest().name.toLowerCase().includes("beta") ? "beta" : "prod";
-
-// Replace the placeholder CloudFront domains with your actual distributions.
+// ─── CloudFront config ────────────────────────────────────────────────────────
 // originToken: shared secret that Lambda@Edge viewer-request validates.
-const CF_CONFIGS = {
-  beta: {
-    url:         "https://d3dxj0v65ds4s6.cloudfront.net/categorize",
-    originToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IlRPS0VOIn0.eyJ1c2VySWQiOiJ3ZWJzYWxlZW0iLCJyb2xlIjoiYWRtaW4iLCJlbnYiOiJiZXRhIn0.cAZVTWK7srj86IAF-x73OwYCNcUheTlUhxZgLofeZHw"
-  },
-  prod: {
-    url:         "https://d3dxj0v65ds4s6.cloudfront.net/categorize",
-    originToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IlRPS0VOIn0.eyJ1c2VySWQiOiJ3ZWJzYWxlZW0iLCJyb2xlIjoiYWRtaW4iLCJlbnYiOiJwcm9kIn0.qZHILrXoa4g2llBM5tFDrf2t03Ir2WrNbrhvaxW2ToE"
-  }
+// Both build channels currently share one token — re-introduce a per-env split
+// here (and update the validator) if you ever rotate one without the other.
+
+const CF_CONFIG = {
+  url:         "https://d3dxj0v65ds4s6.cloudfront.net/categorize",
+  originToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IlRPS0VOIn0.eyJ1c2VySWQiOiJ3ZWJzYWxlZW0iLCJyb2xlIjoiYWRtaW4iLCJlbnYiOiJwcm9kIn0.qZHILrXoa4g2llBM5tFDrf2t03Ir2WrNbrhvaxW2ToE"
 };
 
 function getCFConfig() {
-  return CF_CONFIGS[ACTIVE_ENV];
+  return CF_CONFIG;
+}
+
+// Strip query and fragment before sending the URL to the categorize endpoint.
+// Path is kept (it can carry useful categorization signal — e.g. /finance vs
+// /sports), but ?query and #hash often carry auth tokens, search terms, and
+// session ids that have no business leaving the device.
+function _safeUrlForApi(url) {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return url;
+  }
 }
 
 // ─── Category cache ───────────────────────────────────────────────────────────
@@ -125,7 +129,7 @@ async function classifyWithCloudFront(url, hostname, title) {
     const response = await fetchWithRetry(config.url, {
       method:  "POST",
       headers,
-      body:    JSON.stringify({ url, hostname, title: title || "" })
+      body:    JSON.stringify({ url: _safeUrlForApi(url), hostname, title: title || "" })
     });
 
     if (!response.ok) {

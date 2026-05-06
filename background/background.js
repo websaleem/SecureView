@@ -57,6 +57,21 @@ function isExcluded(url) {
   } catch { return false; }
 }
 
+// Tracking-eligibility filter. Browser-internal URLs and local-file paths are
+// not user-meaningful "browsing" and may carry sensitive context (file paths,
+// chrome:// settings) that shouldn't land in storage or be sent for
+// categorization.
+function shouldTrack(url) {
+  if (!url) return false;
+  if (url.startsWith("chrome://"))           return false;
+  if (url.startsWith("chrome-extension://")) return false;
+  if (url.startsWith("file://"))             return false;
+  if (url.startsWith("about:"))              return false;
+  if (url.startsWith("edge://"))             return false;
+  if (url.startsWith("view-source:"))        return false;
+  return true;
+}
+
 // ─── Session state persistence (survives SW restarts within browser session) ──
 
 async function loadState() {
@@ -217,7 +232,7 @@ async function switchTo(url, tabId, title) {
     await flushTime(currentUrl);
   }
 
-  if (!url || url.startsWith("chrome-extension://") || url === "about:blank" || isExcluded(url)) {
+  if (!shouldTrack(url) || isExcluded(url)) {
     currentUrl = null;
     activeTabId = null;
     currentTabTitle = null;
@@ -269,7 +284,7 @@ async function ensureTracking() {
     if (!tab || !tab.url) return;
 
     const url = tab.url;
-    if (url.startsWith("chrome-extension://") || url === "about:blank") return;
+    if (!shouldTrack(url)) return;
 
     if (url !== currentUrl) {
       Logger.info(LOG, `Tracking re-established: ${new URL(url).hostname}`);
@@ -387,18 +402,21 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
       }
     });
   } else if (message.type === "PAGE_READY") {
-    const { url, title } = message;
-    if (!url || !title) return false;
+    // Trust the URL Chrome attached to sender.tab, NOT the one the content
+    // script chose to send. Title is page-controlled and only used as a
+    // categorization hint, so we accept it from the message after type-checking.
+    const senderUrl = sender.tab?.url;
+    const title = typeof message.title === "string" ? message.title : "";
+    if (!senderUrl || !title || !shouldTrack(senderUrl)) return false;
     ready().then(async () => {
-      // Only process messages from the currently active tab
       if (sender.tab?.id !== activeTabId) return;
-      Logger.info(LOG, `PAGE_READY: "${title}" (${new URL(url).hostname})`);
+      Logger.info(LOG, `PAGE_READY: "${title}" (${new URL(senderUrl).hostname})`);
       if (title !== currentTabTitle) {
         currentTabTitle = title;
         persistState();
-        await syncTabTitle(url, title);
+        await syncTabTitle(senderUrl, title);
       }
-      triggerEagerCategorization(url, title);
+      triggerEagerCategorization(senderUrl, title);
     });
   }
   return false;

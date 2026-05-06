@@ -16,6 +16,15 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
+// Validate a color before letting it into a style="..." attribute. Today the
+// values come from hardcoded hex constants, but interpolating raw into CSS
+// without a guard is the wrong default — one upstream change to "from AI" and
+// it becomes a CSS-injection vector. Falls back to the neutral grey used
+// elsewhere if the input doesn't look like a 6-digit hex.
+function safeColor(c) {
+  return /^#[0-9a-fA-F]{6}$/.test(String(c)) ? c : "#7F8C8D";
+}
+
 function formatDuration(seconds) {
   if (seconds < 60) return `${seconds}s`;
   const h = Math.floor(seconds / 3600);
@@ -114,7 +123,7 @@ function renderCategories(data) {
           <span class="category-time">${formatDuration(cat.seconds)}</span>
         </div>
         <div class="progress-bar">
-          <div class="progress-fill" style="width:${pct}%; background:${cat.color};"></div>
+          <div class="progress-fill" style="width:${pct}%; background:${safeColor(cat.color)};"></div>
         </div>
         <div class="category-meta">
           <span>${pct}% of browsing time</span>
@@ -157,7 +166,7 @@ function renderSites(data, filter = "") {
         </div>
         <div class="site-right">
           <span class="site-time">${formatDuration(site.seconds)}</span>
-          <span class="site-category-badge" style="background:${site.categoryColor || "#7F8C8D"};">
+          <span class="site-category-badge" style="background:${safeColor(site.categoryColor)};">
             ${escapeHtml(site.categoryIcon || "🌐")} ${escapeHtml(site.category)}
           </span>
         </div>
