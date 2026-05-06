@@ -148,6 +148,78 @@ body {
 
 .summary-divider { width: 1px; background: var(--border); margin: 10px 0; }
 
+/* ── Period toggle (Today / Last 7 days) ─────────────────── */
+.period-toggle {
+  display: flex;
+  padding: 10px 14px 0;
+  gap: 8px;
+  background: var(--bg-light);
+}
+.period-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.period-btn:hover { color: var(--primary); border-color: var(--primary); background: #eff6ff; }
+.period-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+.period-btn.active:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+
+/* ── Per-day breakdown strip (week mode) ─────────────────── */
+.day-breakdown {
+  padding: 10px 14px 4px;
+  background: var(--bg-light);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.day-breakdown.hidden { display: none; }
+.day-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.day-row.is-today .day-label { color: var(--primary); font-weight: 700; }
+.day-label {
+  width: 56px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.day-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.day-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.25s;
+}
+.day-row.is-today .day-bar-fill { background: var(--primary-dark); }
+.day-time {
+  width: 56px;
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── View toggle — mirrors index.html .btn style ─────────── */
 .view-toggle {
   display: flex;

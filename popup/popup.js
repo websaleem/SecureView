@@ -51,6 +51,14 @@ function getTodayLabel() {
   });
 }
 
+function getWeekRangeLabel() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 6);
+  const fmt = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
 function getTodayKey() {
   const now = new Date();
   return `data_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}_${String(now.getDate()).padStart(2, "0")}`;
@@ -78,6 +86,73 @@ async function loadAllKeys() {
       resolve(keys.map((k) => ({ key: k, data: items[k] })));
     });
   });
+}
+
+// Aggregate the most recent up-to-7 days of data into a single { domains,
+// categories, totalSeconds, byDay } shape that the existing renderers can
+// consume without modification.
+//
+// - domains: union; seconds summed; category fields taken from the most-recent
+//   visit (highest lastVisit) so a re-categorized domain shows its latest label.
+// - categories: derived from the aggregated domains (so the totals stay
+//   internally consistent).
+// - totalSeconds: sum across days.
+// - byDay: ordered oldest → newest, filled with zero-time placeholders for any
+//   day in the 7-day window that has no stored data, so the UI strip is
+//   always 7 rows.
+async function loadWeekData() {
+  const all = await loadAllKeys();
+  const byKey = Object.fromEntries(all.map((e) => [e.key, e.data || {}]));
+
+  // Build last-7-days window (oldest first), filling gaps with empty entries.
+  const byDay = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = `data_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}_${String(d.getDate()).padStart(2, "0")}`;
+    const data = byKey[key] || { domains: {}, categories: {}, totalSeconds: 0 };
+    byDay.push({ key, date: d, totalSeconds: data.totalSeconds || 0 });
+  }
+
+  const aggregated = { domains: {}, categories: {}, totalSeconds: 0, byDay };
+
+  for (const { key } of byDay) {
+    const data = byKey[key];
+    if (!data) continue;
+    for (const d of Object.values(data.domains || {})) {
+      const acc = aggregated.domains[d.hostname] || {
+        url: d.url, hostname: d.hostname, title: "", seconds: 0,
+        category: d.category, categoryIcon: d.categoryIcon, categoryColor: d.categoryColor,
+        lastVisit: 0,
+      };
+      acc.seconds += d.seconds || 0;
+      if ((d.lastVisit || 0) >= (acc.lastVisit || 0)) {
+        acc.category      = d.category;
+        acc.categoryIcon  = d.categoryIcon;
+        acc.categoryColor = d.categoryColor;
+        acc.title         = d.title || acc.title;
+        acc.url           = d.url || acc.url;
+        acc.lastVisit     = d.lastVisit;
+      }
+      aggregated.domains[d.hostname] = acc;
+    }
+  }
+
+  // Recompute categories + totals from the aggregated domains so the numbers
+  // stay consistent (avoids double-counting if a domain's category changed
+  // mid-week).
+  for (const d of Object.values(aggregated.domains)) {
+    if (!aggregated.categories[d.category]) {
+      aggregated.categories[d.category] = {
+        name: d.category, icon: d.categoryIcon,
+        color: d.categoryColor, seconds: 0,
+      };
+    }
+    aggregated.categories[d.category].seconds += d.seconds;
+    aggregated.totalSeconds += d.seconds;
+  }
+
+  return aggregated;
 }
 
 // ─── Render helpers ───────────────────────────────────────────────────────────
@@ -174,6 +249,30 @@ function renderSites(data, filter = "") {
   }).join("");
 }
 
+function renderByDay(byDay) {
+  const container = document.getElementById("day-breakdown");
+  if (!byDay || !byDay.length) { container.innerHTML = ""; return; }
+
+  const max = Math.max(...byDay.map((d) => d.totalSeconds), 1);
+  const todayLocal = new Date();
+  todayLocal.setHours(0, 0, 0, 0);
+
+  container.innerHTML = byDay.map((d) => {
+    const date = d.date;
+    const isToday = date.getFullYear() === todayLocal.getFullYear()
+      && date.getMonth()    === todayLocal.getMonth()
+      && date.getDate()     === todayLocal.getDate();
+    const label = isToday ? "Today" : date.toLocaleDateString("en-US", { weekday: "short", day: "numeric" });
+    const pct = Math.round((d.totalSeconds / max) * 100);
+    return `
+      <div class="day-row${isToday ? " is-today" : ""}">
+        <span class="day-label">${escapeHtml(label)}</span>
+        <div class="day-bar"><div class="day-bar-fill" style="width:${pct}%;"></div></div>
+        <span class="day-time">${formatDurationShort(d.totalSeconds)}</span>
+      </div>`;
+  }).join("");
+}
+
 function renderSummary(data) {
   document.getElementById("total-time").textContent = formatDurationShort(data.totalSeconds || 0);
   document.getElementById("site-count").textContent = Object.keys(data.domains).length;
@@ -211,7 +310,11 @@ async function excludeAndClearDomain(hostname, data) {
   Logger.info(LOG, `Excluded and cleared tracking for: ${hostname}`);
 }
 
-async function renderCurrentPage(data) {
+// `refresh` is an optional callback (typically applyPeriod) the exclude
+// button calls after mutating today's data, so the categories/sites views
+// re-render against the currently selected period (today vs 7 days) instead
+// of always dumping today-only data into a week-mode UI.
+async function renderCurrentPage(data, refresh) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab || !tab.url || tab.url.startsWith("chrome-extension://")) return;
@@ -254,9 +357,10 @@ async function renderCurrentPage(data) {
       btn.title       = "Exclude this site and clear its tracking data";
       btn.onclick     = async () => {
         await excludeAndClearDomain(hostname, data);
-        renderSummary(data);
-        renderCategories(data);
-        renderSites(data);
+        // Re-render against whichever period is on screen rather than dumping
+        // today-only data into the views (which would briefly mismatch the
+        // 7-day toggle state until storage.onChanged caught up).
+        if (refresh) await refresh();
         const s = await loadSettings();
         renderExclusionList(s.excludedDomains, data);
         applyExcludedState();
@@ -349,7 +453,6 @@ async function renderHistory() {
 
 async function init() {
   await Logger.init();
-  document.getElementById("today-date").textContent  = getTodayLabel();
   const manifest = chrome.runtime.getManifest();
   document.getElementById("header-title").textContent   = manifest.name;
   document.getElementById("header-version").textContent = `v${manifest.version}`;
@@ -368,12 +471,57 @@ async function init() {
     }
   }, true);
 
-  const data = await loadTodayData();
-  Logger.info(LOG, `Popup opened: ${Object.keys(data.domains).length} sites, ${data.totalSeconds}s total`);
-  renderSummary(data);
-  renderCategories(data);
-  renderSites(data);
-  await renderCurrentPage(data);
+  // ── Period state ──────────────────────────────────────────────────────────
+  // todayData is always today's storage record — it backs the "Now: …"
+  // indicator and the exclude/clear flow, both of which must only mutate
+  // today regardless of which period the user is viewing.
+  // displayData is what the summary / categories / sites views render against.
+  let period      = "today";
+  let todayData   = await loadTodayData();
+  let displayData = todayData;
+
+  async function applyPeriod() {
+    const dateLabel  = document.getElementById("today-date");
+    const breakdown  = document.getElementById("day-breakdown");
+    const searchVal  = document.getElementById("search-input").value.trim();
+
+    if (period === "week") {
+      displayData = await loadWeekData();
+      dateLabel.textContent = getWeekRangeLabel();
+      renderByDay(displayData.byDay);
+      breakdown.classList.remove("hidden");
+    } else {
+      displayData = todayData;
+      dateLabel.textContent = getTodayLabel();
+      breakdown.classList.add("hidden");
+    }
+
+    renderSummary(displayData);
+    renderCategories(displayData);
+    renderSites(displayData, searchVal);
+    await renderCurrentPage(todayData, applyPeriod);
+  }
+
+  Logger.info(LOG, `Popup opened: ${Object.keys(todayData.domains).length} sites, ${todayData.totalSeconds}s total`);
+  await applyPeriod();
+
+  // Period toggle wiring
+  const periodToday = document.getElementById("period-today");
+  const periodWeek  = document.getElementById("period-week");
+  periodToday.addEventListener("click", async () => {
+    if (period === "today") return;
+    period = "today";
+    periodToday.classList.add("active");
+    periodWeek.classList.remove("active");
+    await applyPeriod();
+  });
+  periodWeek.addEventListener("click", async () => {
+    if (period === "week") return;
+    period = "week";
+    periodWeek.classList.add("active");
+    periodToday.classList.remove("active");
+    await applyPeriod();
+  });
 
   // View toggle
   const btnCats = document.getElementById("btn-categories");
@@ -397,7 +545,7 @@ async function init() {
 
   // Search
   document.getElementById("search-input").addEventListener("input", (e) => {
-    renderSites(data, e.target.value.trim());
+    renderSites(displayData, e.target.value.trim());
   });
 
   // Clear today
@@ -423,7 +571,8 @@ async function init() {
 
   // Settings
   document.getElementById("settings-btn").addEventListener("click", async () => {
-    await renderSettings(data);
+    // Settings overlay's exclude-list mutators operate on today's data.
+    await renderSettings(todayData);
     document.getElementById("settings-overlay").classList.remove("hidden");
   });
 
@@ -455,8 +604,8 @@ async function init() {
     }
     const updated = [...settings.excludedDomains, raw];
     await saveExcludedDomains(updated);
-    renderExclusionList(updated, data);
-    await renderCurrentPage(data);
+    renderExclusionList(updated, todayData);
+    await renderCurrentPage(todayData, applyPeriod);
     Logger.info(LOG, `Added excluded domain: ${raw}`);
     input.value = "";
   });
@@ -465,22 +614,24 @@ async function init() {
     if (e.key === "Enter") document.getElementById("exclusion-add-btn").click();
   });
 
-  // Live-refresh: re-render the moment the background writes a category or title update.
-  // Replace (not merge) so deletions in storage are reflected — search state lives in
-  // the input element, not in `data`, so nothing is lost.
+  // Live-refresh: pick up category / title / time updates the background
+  // writes to storage. Today-mode listens to today's key; week-mode listens to
+  // every data_* key change (rare in practice — only today is mutated unless
+  // pruning runs).
   const todayKey = getTodayKey();
   chrome.storage.onChanged.addListener(async (changes, area) => {
-    if (area !== "local" || !(todayKey in changes)) return;
-    const newData = changes[todayKey].newValue;
-    if (!newData) return;
+    if (area !== "local") return;
+    const dataKeysChanged = Object.keys(changes).some((k) => /^data_\d{4}_\d{2}_\d{2}$/.test(k));
+    if (!dataKeysChanged) return;
+
+    // Always refresh today's snapshot — it backs the "Now: …" indicator and
+    // exclude/clear actions regardless of which period is on screen.
+    if (todayKey in changes && changes[todayKey].newValue) {
+      todayData = changes[todayKey].newValue;
+    }
+
     Logger.debug(LOG, "Storage updated — refreshing display");
-    data.domains      = newData.domains     || {};
-    data.categories   = newData.categories  || {};
-    data.totalSeconds = newData.totalSeconds ?? 0;
-    renderSummary(data);
-    renderCategories(data);
-    renderSites(data, document.getElementById("search-input").value.trim());
-    await renderCurrentPage(data);
+    await applyPeriod();
   });
 }
 
