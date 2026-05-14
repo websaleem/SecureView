@@ -40,10 +40,10 @@ CHANNEL=beta ./scripts/build-zip.sh        # SecureView-Beta-<version>.zip
 ```bash
 # 1. Bump version in manifest.json and commit.
 # 2. Tag and push:
-git tag v1.0.4         # production
+git tag v1.0.5         # production
 # or
-git tag v1.0.4-beta    # beta
-git push origin v1.0.4
+git tag v1.0.5-beta    # beta
+git push origin v1.0.5
 
 # 3. Watch the workflow in GitHub Actions; it will:
 #    - re-validate the tag matches manifest.version
@@ -97,7 +97,7 @@ Gmail no longer accepts plain account passwords for SMTP — you need an App Pas
 
 If the Gmail account doesn't have 2-Step Verification, the **App passwords** page won't appear at all. Enable 2SV first.
 
-The notify job runs `if: always()` after the publish step, so you'll get a "success" email when a release ships and a "failed" email when something breaks. The subject line carries the channel and outcome, e.g. `[SecureView · production · success] v1.0.4` — easy to filter in your inbox.
+The notify job runs `if: always()` after the publish step, so you'll get a "success" email when a release ships and a "failed" email when something breaks. The subject line carries the channel and outcome, e.g. `[SecureView · production · success] v1.0.5` — easy to filter in your inbox.
 
 ## Architecture
 
