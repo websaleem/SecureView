@@ -1,0 +1,89 @@
+name: release (production)
+
+# Production: tag a strict semver like v1.0.4. Anything with a suffix
+# (e.g. v1.0.4-beta) is handled by release-beta.yml instead.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify tag matches manifest version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          MANIFEST=$(node -p "require('./manifest.json').version")
+          TAG=${GITHUB_REF#refs/tags/v}
+          if [ "$MANIFEST" != "$TAG" ]; then
+            echo "::error::Tag v$TAG does not match manifest.json version $MANIFEST"
+            exit 1
+          fi
+
+      - name: Build production zip
+        env:
+          CHANNEL: production
+        run: ./scripts/build-zip.sh
+
+      - name: Upload + publish to Chrome Web Store
+        env:
+          CWS_CLIENT_ID:     ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_EXTENSION_ID:  ${{ secrets.CWS_EXTENSION_ID }}
+        run: |
+          ZIP=$(ls SecureView-[0-9]*.zip | head -1)
+          test -f "$ZIP" || { echo "no zip produced"; exit 1; }
+          npx --yes chrome-webstore-upload-cli@3 upload \
+            --source "$ZIP" \
+            --extension-id  "$CWS_EXTENSION_ID" \
+            --client-id     "$CWS_CLIENT_ID" \
+            --client-secret "$CWS_CLIENT_SECRET" \
+            --refresh-token "$CWS_REFRESH_TOKEN" \
+            --auto-publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SecureView-${{ github.ref_name }}
+          path: SecureView-[0-9]*.zip
+          retention-days: 90
+
+  notify:
+    needs: publish
+    if: always()
+    runs-on: ubuntu-latest
+    # Run JS actions on Node 24 ahead of GitHub's June 2026 forced upgrade,
+    # so dawidd6/action-send-mail's Node 20 deprecation warning goes away.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Send deployment email
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_APP_PASSWORD }}
+          from: SecureView CI <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_TO }}
+          subject: "[SecureView · production · ${{ needs.publish.result }}] ${{ github.ref_name }}"
+          body: |
+            Channel:    production
+            Tag:        ${{ github.ref_name }}
+            Result:     ${{ needs.publish.result }}
+            Commit:     ${{ github.sha }}
+            Triggered:  ${{ github.event_name }} by ${{ github.actor }}
+
+            Run:  https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

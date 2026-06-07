@@ -1,0 +1,258 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SecureView backend stack — Documents the complete existing architecture (CloudFront, WAF, Lambda@Edge, API Gateway, Bedrock Lambda).
+
+Resources:
+  # ───────── WAFv2 WebACL (Global for CloudFront) ─────────
+  SecureViewWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: SecureView-RateLimit-Global
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: SecureView-WAF-Global
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: RateLimitByIP
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+            SampledRequestsEnabled: true
+
+  # ───────── Lambda@Edge IAM Role ─────────
+  SecureViewEdgeLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: SecureViewEdgeLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  # ───────── Lambda@Edge Function ─────────
+  SecureViewEdgeLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: svSignedCategorizeRequest
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt SecureViewEdgeLambdaRole.Arn
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        # Code is managed in backend/lambda/lambda_function.py
+        ZipFile: |
+          def lambda_handler(event, context):
+              pass
+
+  # ───────── Lambda Version (Required for CloudFront attachment) ─────────
+  SecureViewEdgeLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref SecureViewEdgeLambda
+      Description: Lambda Edge for SecureView request routing
+
+  # ───────── Bedrock Lambda IAM Role ─────────
+  SecureViewBedrockLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: SecureViewBedrockLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Sid: Bedrock
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  # ───────── Bedrock Lambda Function ─────────
+  SecureViewBedrockLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: svCategorizeURL
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt SecureViewBedrockLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        # Code is managed in backend/lambda/bedrock/lambda_function.py
+        ZipFile: |
+          def lambda_handler(event, context):
+              pass
+
+  # ───────── API Gateway (REST API) ─────────
+  SecureViewApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: SecureViewCategorizationAPI
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  SecureViewApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ParentId: !GetAtt SecureViewApiGateway.RootResourceId
+      PathPart: categorize
+
+  SecureViewApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ResourceId: !Ref SecureViewApiGatewayResource
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SecureViewBedrockLambda.Arn}:${stageVariables.lambdaAlias}/invocations"
+
+  SecureViewApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - SecureViewApiGatewayMethod
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+
+  SecureViewApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      DeploymentId: !Ref SecureViewApiGatewayDeployment
+      StageName: prod
+      Variables:
+        lambdaAlias: prod
+
+  SecureViewApiGatewayBetaStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      DeploymentId: !Ref SecureViewApiGatewayDeployment
+      StageName: beta
+      Variables:
+        lambdaAlias: beta
+
+  # ───────── Lambda Permissions for API Gateway (Aliases) ─────────
+  SecureViewBedrockLambdaProdPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub "${SecureViewBedrockLambda.Arn}:prod"
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/categorize"
+
+  SecureViewBedrockLambdaBetaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub "${SecureViewBedrockLambda.Arn}:beta"
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/categorize"
+
+  # ───────── CloudFront Distribution ─────────
+  SecureViewDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: SecureView AI Categorization API
+        WebACLId: !GetAtt SecureViewWebACL.Arn
+        Origins:
+          - Id: SecureViewApiGatewayOrigin
+            DomainName: !Sub "${SecureViewApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPPort: 80
+              HTTPSPort: 443
+          - Id: SecureViewApiGatewayBetaOrigin
+            DomainName: !Sub "${SecureViewApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPPort: 80
+              HTTPSPort: 443
+        CacheBehaviors:
+          - TargetOriginId: SecureViewApiGatewayBetaOrigin
+            PathPattern: "/beta/*"
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref SecureViewEdgeLambdaVersion
+                IncludeBody: true
+        DefaultCacheBehavior:
+          TargetOriginId: SecureViewApiGatewayOrigin
+          ViewerProtocolPolicy: https-only
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          LambdaFunctionAssociations:
+            - EventType: origin-request
+              LambdaFunctionARN: !Ref SecureViewEdgeLambdaVersion
+              IncludeBody: true
+
+Outputs:
+  DistributionDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt SecureViewDistribution.DomainName

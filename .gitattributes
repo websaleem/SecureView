@@ -1,0 +1,8 @@
+# Paths excluded when running `git archive` (used by some CI systems and the
+# release workflow as a fallback). These never need to ship in the extension zip.
+.github           export-ignore
+scripts           export-ignore
+README.md         export-ignore
+.gitignore        export-ignore
+.gitattributes    export-ignore
+*.zip             export-ignore
