@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "SecureView",
   "version": "1.0.6",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAobfhl+MivUGYCfHRws0kZcslR7C0KdvCdIgTxEWLjrNe7Y23WMRX5f93Dj2uMWfpdzu/GavLKiBEVtQ8wHInWy+txNniUIp+nWRU0o39LrWB81w+xIXhlNXzBqRxQaqrI17TuXlxeENxzxrc1lqyKwAZWBYNhEjvBCkb0j/VW+ftKgr9S1r+I43hI5VBy+v/BJCRRvqk1ihIwqqw+7sShEuGM5izhaw86c9UG2Dzn7vf6FvtFHPcc+c6CXSO4KDRsMJqpaAeAsPfLCQ4T+efzR6lEicL8iIZ61Lv373NOpMyQO0JpQW4GyceS0VwpbpqrqRd/64Z78zoAycbcFZBTQIDAQAB",
   "description": "Track active browsing time, get AI-powered site categorization, and visualize your daily web activities - all in one dashboard.",
   "permissions": [
     "tabs",
