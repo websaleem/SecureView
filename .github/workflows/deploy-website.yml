@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - 'website/**'
   workflow_dispatch:
@@ -22,15 +23,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-southeast-2
 
-      - name: Deploy to secureview.websaleem.com
+      - name: Deploy Website to S3 and Invalidate CloudFront
         run: |
-          echo "Deploying website to secureview.websaleem.com..."
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            BUCKET="secureview.websaleem.com"
+            DIST_ID="SECUREVIEW_PROD_CF_DIST_ID"
+            echo "=== Deploying to PRODUCTION ($BUCKET) ==="
+          else
+            BUCKET="dev.secureview.websaleem.com"
+            DIST_ID="SECUREVIEW_DEV_CF_DIST_ID"
+            echo "=== Deploying to DEVELOPMENT ($BUCKET) ==="
+          fi
           
           # Sync and capture output to stderr (so we still see it in logs) and a variable
-          SYNC_OUTPUT=$(aws s3 sync website/ s3://secureview.websaleem.com/ --delete | tee /dev/stderr)
+          SYNC_OUTPUT=$(aws s3 sync website/ s3://$BUCKET/ --delete | tee /dev/stderr)
           
           # Extract exactly what files were modified/uploaded/deleted
-          PATHS=$(echo "$SYNC_OUTPUT" | grep -oE "s3://secureview.websaleem.com/[^ ]+" | sed "s|s3://secureview.websaleem.com||g")
+          PATHS=$(echo "$SYNC_OUTPUT" | grep -oE "s3://$BUCKET/[^ ]+" | sed "s|s3://$BUCKET||g")
           
           if [ -z "$PATHS" ]; then
             echo "No files changed. Skipping CloudFront invalidation."
@@ -38,6 +47,6 @@ jobs:
             # Convert paths to space-separated list
             PATHS_SPACED=$(echo "$PATHS" | tr '\n' ' ')
             echo "Invalidating paths: $PATHS_SPACED"
-            aws cloudfront create-invalidation --distribution-id SECUREVIEW_PROD_CF_DIST_ID --paths $PATHS_SPACED
+            aws cloudfront create-invalidation --distribution-id $DIST_ID --paths $PATHS_SPACED
           fi
 
