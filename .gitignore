@@ -11,3 +11,6 @@ package-lock.json
 *.swp
 .idea/
 .vscode/
+
+# Environment files
+.env*
