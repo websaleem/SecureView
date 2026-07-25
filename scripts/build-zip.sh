@@ -18,7 +18,7 @@ case "$CHANNEL" in
   *) echo "CHANNEL must be 'production' or 'beta' (got: $CHANNEL)"; exit 1 ;;
 esac
 
-VERSION=$(node -p "require('./manifest.json').version")
+VERSION=$(node -p "require('./chrome/manifest.json').version")
 DEFAULT_NAME="SecureView"
 BETA_NAME="SecureView Beta"
 
@@ -30,7 +30,7 @@ fi
 
 # Validate manifest before doing anything else.
 node -e '
-  const m = require("./manifest.json");
+  const m = require("./chrome/manifest.json");
   if (m.manifest_version !== 3) { console.error("manifest_version != 3"); process.exit(1); }
   if (!m.version)               { console.error("manifest.version missing"); process.exit(1); }
   if (!m.name)                  { console.error("manifest.name missing"); process.exit(1); }
@@ -42,9 +42,9 @@ rm -rf "$BUILD_DIR" "$OUTPUT"
 mkdir -p "$BUILD_DIR"
 
 # Copy the shipping bits.
-cp manifest.json "$BUILD_DIR/"
+cp chrome/manifest.json "$BUILD_DIR/"
 for d in background content icons popup shared; do
-  cp -R "$d" "$BUILD_DIR/"
+  cp -R "chrome/$d" "$BUILD_DIR/"
 done
 
 # Drop macOS metadata so a developer build doesn't accidentally ship it.

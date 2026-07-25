@@ -377,11 +377,12 @@ const EXCLUDED_DOMAINS_KEY = "excluded_domains";
 
 async function loadSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get([Logger.CONFIG_KEY, "force_cloudfront", EXCLUDED_DOMAINS_KEY], (result) => {
+    chrome.storage.local.get([Logger.CONFIG_KEY, "force_cloudfront", EXCLUDED_DOMAINS_KEY, "emailReportFreq"], (result) => {
       resolve({
         debugLog:        result[Logger.CONFIG_KEY]?.enabled === true,
         forceCloudFront: result["force_cloudfront"] === true,
-        excludedDomains: result[EXCLUDED_DOMAINS_KEY] || []
+        excludedDomains: result[EXCLUDED_DOMAINS_KEY] || [],
+        emailReportFreq: result["emailReportFreq"] || "daily"
       });
     });
   });
@@ -419,16 +420,170 @@ function renderExclusionList(domains, data) {
   });
 }
 
+async function cognitoRequest(target, payload) {
+  const doRequest = async (token) => {
+    // If the payload has an AccessToken field, update it with the provided token
+    const updatedPayload = payload.AccessToken ? { ...payload, AccessToken: token } : payload;
+    const res = await fetch(`https://cognito-idp.ap-southeast-2.amazonaws.com/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-amz-json-1.1",
+        "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`
+      },
+      body: JSON.stringify(updatedPayload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.__type || "Unknown error");
+    return data;
+  };
+
+  try {
+    return await doRequest(payload.AccessToken);
+  } catch (e) {
+    // If token expired, try refreshing
+    if (e.message && (e.message.includes("NotAuthorizedException") || e.message.includes("expired"))) {
+      const stored = await chrome.storage.local.get(['refreshToken']);
+      if (stored.refreshToken) {
+        try {
+          const refreshRes = await fetch(`https://cognito-idp.ap-southeast-2.amazonaws.com/`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-amz-json-1.1",
+              "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+            },
+            body: JSON.stringify({
+              AuthFlow: "REFRESH_TOKEN_AUTH",
+              ClientId: "1bpn546e7vk1bm95ncbr0u5ma8",
+              AuthParameters: { REFRESH_TOKEN: stored.refreshToken }
+            })
+          });
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json();
+            const newToken = refreshData.AuthenticationResult?.AccessToken;
+            if (newToken) {
+              await chrome.storage.local.set({
+                accessToken: newToken,
+                idToken: refreshData.AuthenticationResult?.IdToken || (await chrome.storage.local.get(['idToken'])).idToken
+              });
+              Logger.info(LOG, "Token refreshed in popup");
+              return await doRequest(newToken);
+            }
+          }
+        } catch (refreshErr) {
+          Logger.warn(LOG, "Token refresh failed in popup", refreshErr?.message);
+        }
+      }
+    }
+    throw e;
+  }
+}
+
+async function loadProfileData() {
+  const btn = document.getElementById("profile-save-btn");
+  const msg = document.getElementById("profile-msg");
+  msg.textContent = "Loading...";
+  msg.style.color = "var(--text-muted)";
+  btn.disabled = true;
+
+  try {
+    const tokens = await chrome.storage.local.get(['accessToken']);
+    if (!tokens.accessToken) return;
+
+    const res = await cognitoRequest("GetUser", { AccessToken: tokens.accessToken });
+    const attrs = res.UserAttributes || [];
+    
+    let name = "", type = "Adult", parent = "", email = "";
+    attrs.forEach(a => {
+      if (a.Name === "name") name = a.Value;
+      if (a.Name === "custom:account_type") type = a.Value;
+      if (a.Name === "custom:parent_name") parent = a.Value;
+      if (a.Name === "email") email = a.Value;
+    });
+
+    document.getElementById("profile-email").value = email;
+    document.getElementById("profile-name").value = name;
+    const radio = document.querySelector(`input[name="profileAccountType"][value="${type}"]`);
+    if (radio) radio.checked = true;
+    document.getElementById("profile-parent").value = parent;
+    
+    if (type !== "Child") {
+      document.getElementById("profile-parent-group").classList.add("hidden");
+    } else {
+      document.getElementById("profile-parent-group").classList.remove("hidden");
+    }
+    
+    msg.textContent = "";
+  } catch (e) {
+    msg.textContent = "Error loading profile.";
+    msg.style.color = "#ef4444";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function renderSettings(data) {
   const settings = await loadSettings();
   document.getElementById("setting-debug-log").checked = settings.debugLog;
   document.getElementById("setting-force-cf").checked  = settings.forceCloudFront;
+  document.getElementById("setting-report-freq").value = settings.emailReportFreq;
   renderExclusionList(settings.excludedDomains, data);
+  await loadProfileData();
+}
+
+function renderHistoryGraph(all) {
+  const container = document.getElementById("history-graph-container");
+  if (!container) return;
+  
+  if (!all || all.length === 0) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const days = all.slice(0, 7).reverse();
+  const maxSeconds = Math.max(...days.map(d => d.data.totalSeconds || 0));
+
+  let barsHtml = '';
+  let labelsHtml = '';
+
+  days.forEach((dayData) => {
+    const { key, data } = dayData;
+    const [, year, month, day] = key.split("_");
+    const date = new Date(year, month - 1, day);
+    const label = date.toLocaleDateString("en-US", { weekday: "short" });
+    
+    const total = data.totalSeconds || 0;
+    const heightPct = maxSeconds > 0 ? (total / maxSeconds) * 100 : 0;
+    
+    const cats = Object.entries(data.categories || {}).sort((a, b) => b[1].time - a[1].time);
+      
+    let segmentsHtml = '';
+    cats.forEach(([catName, catData]) => {
+      const segPct = total > 0 ? ((catData.seconds || 0) / total) * 100 : 0;
+      if (segPct > 0) {
+        segmentsHtml += `<div class="graph-segment" style="height: ${segPct}%; background-color: ${catData.color || '#ccc'};"></div>`;
+      }
+    });
+
+    barsHtml += `
+      <div class="graph-col" style="height: ${Math.max(heightPct, 2)}%;">
+        ${segmentsHtml}
+        <div class="graph-tooltip">${label}: ${formatDurationShort(total)}</div>
+      </div>
+    `;
+    labelsHtml += `<div class="graph-label">${label}</div>`;
+  });
+
+  container.innerHTML = `
+    <div class="graph-bars">${barsHtml}</div>
+    <div class="graph-labels">${labelsHtml}</div>
+  `;
 }
 
 async function renderHistory() {
   const all = await loadAllKeys();
   const container = document.getElementById("history-list");
+  
+  renderHistoryGraph(all);
 
   if (all.length === 0) {
     container.innerHTML = `<div class="empty-state"><div class="empty-text">No history available</div></div>`;
@@ -451,11 +606,37 @@ async function renderHistory() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+function decodeJWT(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    return null;
+  }
+}
+
 async function init() {
   await Logger.init();
+  
+  const tokens = await chrome.storage.local.get(['accessToken', 'idToken', 'customProfileName']);
+  if (!tokens.accessToken) {
+    window.location.href = "login.html";
+    return;
+  }
+
+  const el = document.getElementById('user-name');
+  if (tokens.customProfileName) {
+    if (el) el.textContent = `Hi, ${tokens.customProfileName.split(' ')[0]}`;
+  } else if (tokens.idToken) {
+    const payload = decodeJWT(tokens.idToken);
+    if (payload && payload.name) {
+      if (el) el.textContent = `Hi, ${payload.name.split(' ')[0]}`;
+    }
+  }
+
   const manifest = chrome.runtime.getManifest();
-  document.getElementById("header-title").textContent   = manifest.name;
-  document.getElementById("header-version").textContent = `v${manifest.version}`;
+  document.getElementById("footer-version").textContent = `SecureView v${manifest.version}`;
 
   // Delegated favicon error handler. MV3 CSP blocks inline onerror handlers,
   // so we listen on the capture phase (error events don't bubble).
@@ -569,7 +750,6 @@ async function init() {
     document.getElementById("history-overlay").classList.add("hidden");
   });
 
-  // Settings
   document.getElementById("settings-btn").addEventListener("click", async () => {
     // Settings overlay's exclude-list mutators operate on today's data.
     await renderSettings(todayData);
@@ -578,6 +758,99 @@ async function init() {
 
   document.getElementById("close-settings").addEventListener("click", () => {
     document.getElementById("settings-overlay").classList.add("hidden");
+  });
+
+  // Profile Listeners
+  document.querySelectorAll('input[name="profileAccountType"]').forEach(r => {
+    r.addEventListener("change", e => {
+      if (e.target.value !== "Child") {
+        document.getElementById("profile-parent-group").classList.add("hidden");
+      } else {
+        document.getElementById("profile-parent-group").classList.remove("hidden");
+      }
+    });
+  });
+
+  document.getElementById("profile-save-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("profile-save-btn");
+    const msg = document.getElementById("profile-msg");
+    const name = document.getElementById("profile-name").value.trim();
+    const type = document.querySelector('input[name="profileAccountType"]:checked').value;
+    const parent = document.getElementById("profile-parent").value.trim();
+
+    if (!name) {
+      msg.textContent = "Name is required."; msg.style.color = "#ef4444"; return;
+    }
+    if (type === "Child" && !parent) {
+      msg.textContent = "Parent name is required."; msg.style.color = "#ef4444"; return;
+    }
+
+    btn.disabled = true;
+    msg.textContent = "Saving...";
+    msg.style.color = "var(--text-muted)";
+
+    try {
+      const tokens = await chrome.storage.local.get(['accessToken']);
+      const attrs = [
+        { Name: "name", Value: name },
+        { Name: "custom:account_type", Value: type }
+      ];
+      if (type === "Child") attrs.push({ Name: "custom:parent_name", Value: parent });
+      else attrs.push({ Name: "custom:parent_name", Value: "" });
+
+      await cognitoRequest("UpdateUserAttributes", {
+        AccessToken: tokens.accessToken,
+        UserAttributes: attrs
+      });
+
+      await chrome.storage.local.set({ customProfileName: name });
+      const el = document.getElementById('user-name');
+      if (el) el.textContent = `Hi, ${name.split(' ')[0]}`;
+
+      msg.textContent = "Profile saved!";
+      msg.style.color = "#10b981"; // success green
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.style.color = "#ef4444";
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => { if (msg.textContent === "Profile saved!") msg.textContent = ""; }, 3000);
+    }
+  });
+
+  document.getElementById("password-save-btn").addEventListener("click", async () => {
+    const btn = document.getElementById("password-save-btn");
+    const msg = document.getElementById("password-msg");
+    const oldPass = document.getElementById("profile-old-pass").value;
+    const newPass = document.getElementById("profile-new-pass").value;
+
+    if (!oldPass || !newPass) {
+      msg.textContent = "Both passwords required."; msg.style.color = "#ef4444"; return;
+    }
+
+    btn.disabled = true;
+    msg.textContent = "Updating...";
+    msg.style.color = "var(--text-muted)";
+
+    try {
+      const tokens = await chrome.storage.local.get(['accessToken']);
+      await cognitoRequest("ChangePassword", {
+        AccessToken: tokens.accessToken,
+        PreviousPassword: oldPass,
+        ProposedPassword: newPass
+      });
+
+      msg.textContent = "Password updated!";
+      msg.style.color = "#10b981";
+      document.getElementById("profile-old-pass").value = "";
+      document.getElementById("profile-new-pass").value = "";
+    } catch (e) {
+      msg.textContent = e.message;
+      msg.style.color = "#ef4444";
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => { if (msg.textContent === "Password updated!") msg.textContent = ""; }, 3000);
+    }
   });
 
   document.getElementById("setting-debug-log").addEventListener("change", (e) => {
@@ -591,6 +864,12 @@ async function init() {
     const enabled = e.target.checked;
     chrome.storage.local.set({ force_cloudfront: enabled });
     Logger.info(LOG, `Force CloudFront ${enabled ? "enabled" : "disabled"} via settings`);
+  });
+
+  document.getElementById("setting-report-freq").addEventListener("change", (e) => {
+    const freq = e.target.value;
+    chrome.storage.local.set({ emailReportFreq: freq });
+    Logger.info(LOG, `Email report frequency set to ${freq}`);
   });
 
   document.getElementById("exclusion-add-btn").addEventListener("click", async () => {

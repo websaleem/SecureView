@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="icon" type="image/x-icon" href="https://secureview.websaleem.com/images/icon.ico">
+    <title>SecureView | Privacy-First Browsing Intelligence</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --bg-light: #f8fafc;
+            --bg-white: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --success: #10b981;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: var(--text-main);
+            background-color: var(--bg-light);
+            line-height: 1.6;
+        }
+
+        /* Navigation */
+        nav {
+            background: var(--bg-white);
+            padding: 1rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo { font-size: 1.5rem; font-weight: 800; color: var(--primary); }
+        .nav-links a { margin-left: 2rem; text-decoration: none; color: var(--text-muted); font-weight: 500; }
+        .nav-links a:hover { color: var(--primary); }
+
+        /* Buttons */
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: var(--primary); color: white; border: none; }
+        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
+        .btn-outline { border: 2px solid var(--primary); color: var(--primary); }
+        .btn-outline:hover { background: var(--primary); color: white; }
+
+        /* Hero Section */
+        .hero {
+            padding: 6rem 5%;
+            text-align: center;
+            background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+        }
+        .hero h1 { font-size: 3.5rem; line-height: 1.1; margin-bottom: 1.5rem; letter-spacing: -0.02em; }
+        .hero p { font-size: 1.25rem; color: var(--text-muted); max-width: 600px; margin: 0 auto 2.5rem; }
+        .hero-badges { display: flex; justify-content: center; gap: 1rem; margin-top: 2rem; flex-wrap: wrap; }
+        .badge { background: #e0f2fe; color: #0369a1; padding: 0.5rem 1rem; border-radius: 999px; font-size: 0.875rem; font-weight: 600; }
+
+        /* Features Section */
+        .features { padding: 5rem 5%; background: var(--bg-white); }
+        .section-title { text-align: center; font-size: 2.25rem; margin-bottom: 3rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2.5rem; max-width: 1200px; margin: 0 auto; }
+
+        .card {
+            padding: 2.5rem;
+            border-radius: 16px;
+            background: var(--bg-light);
+            border: 1px solid #e2e8f0;
+            transition: transform 0.2s;
+        }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+        .card i { font-size: 2.5rem; color: var(--primary); margin-bottom: 1.5rem; }
+        .card h3 { font-size: 1.25rem; margin-bottom: 1rem; }
+        .card p { color: var(--text-muted); }
+
+        /* Deep Dive / Tech Section */
+        .tech-section { padding: 5rem 5%; background: #0f172a; color: white; }
+        .tech-container { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; gap: 4rem; }
+        .tech-content { flex: 1; }
+        .tech-content h2 { font-size: 2.25rem; margin-bottom: 1.5rem; }
+        .tech-content p { color: #94a3b8; margin-bottom: 1.5rem; font-size: 1.1rem; }
+        .tech-list { list-style: none; }
+        .tech-list li { margin-bottom: 1rem; display: flex; align-items: center; gap: 10px; }
+        .tech-list i { color: var(--success); }
+
+        /* Footer */
+        footer { background: var(--bg-white); padding: 3rem 5%; text-align: center; border-top: 1px solid #e2e8f0; }
+        .footer-links a { color: var(--text-muted); margin: 0 1rem; text-decoration: none; }
+        .footer-links a:hover { color: var(--primary); }
+        .copyright { color: var(--text-muted); margin-top: 1.5rem; font-size: 0.875rem; }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.5rem; }
+            .tech-container { flex-direction: column; }
+            .nav-links { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="logo">
+			<img src="https://secureview.websaleem.com/images/icon.png" alt="SecureView Logo" style="height: 32px; width: auto; vertical-align: middle; margin-right: 8px;"> SecureView
+		</div>
+        <div class="nav-links">
+			<a href="#home">Home</a>
+            <a href="#features">Features</a>
+            <a href="#technology">How it Works</a>
+            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+            <a href="contact-support.html">Contact Support</a>
+            <a href="https://chromewebstore.google.com/detail/secureview/ojhmodiiehcingcnhlglenenoemmegim" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="margin-left: 2rem; color: white;">Add to Chrome</a>
+        </div>
+    </nav>
+
+    <section class="hero" id="home">
+        <h1>Make Sense of Your Browsing Time. <br><span style="color: var(--primary);">Securely.</span></h1>
+        <p>SecureView tracks your active browsing time, categorizes every website you visit, and presents clear daily summaries — all with your privacy in mind.</p>
+        <div>
+            <a href="https://chromewebstore.google.com/detail/secureview/ojhmodiiehcingcnhlglenenoemmegim" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="font-size: 1.1rem; padding: 1rem 2rem;"><i class="fab fa-chrome"></i> Install Extension</a>
+            <a href="#technology" class="btn btn-outline" style="font-size: 1.1rem; padding: 1rem 2rem; margin-left: 1rem;">See How it Works</a>
+        </div>
+        <div class="hero-badges">
+            <span class="badge"><i class="fas fa-check-circle"></i> 100% Free</span>
+            <span class="badge"><i class="fas fa-lock"></i> Manifest V3 Compliant</span>
+            <span class="badge"><i class="fas fa-brain"></i> AI Categorization</span>
+            <span class="badge"><i class="fas fa-database"></i> Stored Locally</span>
+        </div>
+    </section>
+
+    <section class="features" id="features">
+        <h2 class="section-title">Why Choose SecureView?</h2>
+        <div class="grid">
+            <div class="card">
+                <i class="fas fa-layer-group"></i>
+                <h3>Intelligent Categorization</h3>
+                <p>SecureView automatically groups your browsing into 11 intuitive categories — Technology, Social Media, Finance, Entertainment, and more — using a built-in rule set backed by AI classification for unrecognized sites.</p>
+            </div>
+            <div class="card">
+                <i class="fas fa-clock"></i>
+                <h3>Active Time Tracking</h3>
+                <p>Only counts time when you're actually browsing. Idle detection and window focus tracking ensure your stats reflect real usage, not time spent away from your desk.</p>
+            </div>
+            <div class="card">
+                <i class="fas fa-user-shield"></i>
+                <h3>Privacy by Design</h3>
+                <p>All browsing data is stored locally on your device using Chrome's storage API. You control what is tracked — exclude any domain instantly with one click and clear your data at any time.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="tech-section" id="technology">
+        <div class="tech-container">
+            <div class="tech-content">
+                <h2>How SecureView Works</h2>
+                <p>SecureView uses a two-stage categorization approach. A built-in rule set covers thousands of popular domains instantly — no network call needed. For sites not in the rule set, an AI classification service powered by Amazon Bedrock determines the category.</p>
+                <p>The AI pipeline runs on AWS infrastructure (CloudFront → Lambda@Edge → API Gateway → Lambda → Bedrock). Only the site URL, hostname, and page title are ever sent — and results are cached locally so the same domain is never sent twice.</p>
+                <ul class="tech-list">
+                    <li><i class="fas fa-check"></i> <strong>Local-First:</strong> Rule-based matching needs no internet connection.</li>
+                    <li><i class="fas fa-check"></i> <strong>Local Storage:</strong> Daily browsing records stay on your device in Chrome's storage API.</li>
+                    <li><i class="fas fa-check"></i> <strong>You're in Control:</strong> Exclude domains, toggle AI classification, or clear all data from the popup.</li>
+                    <li><i class="fas fa-check"></i> <strong>Transparent:</strong> No analytics engines, no selling of data, no third-party trackers.</li>
+                </ul>
+            </div>
+            <div style="flex: 1; text-align: center; background: rgba(255,255,255,0.05); padding: 3rem; border-radius: 16px;">
+                <i class="fas fa-laptop-code" style="font-size: 5rem; color: var(--success); margin-bottom: 1rem;"></i>
+                <h3 style="margin-bottom: 1.5rem;">Local Storage &amp; Rules</h3>
+                <img src="https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v18.0/dist/MachineLearning/Bedrock.png"
+                     alt="Amazon Bedrock"
+                     style="width:4rem;height:4rem;object-fit:contain;margin-bottom:1rem;"
+                     onerror="this.src='https://icon.icepanel.io/AWS/svg/Machine-Learning/Bedrock.svg';">
+                <h3>AI via Amazon Bedrock</h3>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="logo" style="margin-bottom: 1.5rem;"><img src="https://secureview.websaleem.com/images/icon.png" alt="SecureView Logo" style="height: 32px; width: auto; vertical-align: middle; margin-right: 8px;"> SecureView</div>
+        <div class="footer-links">
+            <a href="contact-support.html">Contact Support</a>
+            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+        </div>
+        <p class="copyright">&copy; 2026 SecureView. All rights reserved.</p>
+    </footer>
+
+</body>
+</html>

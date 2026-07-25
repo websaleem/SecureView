@@ -1,0 +1,500 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SecureView backend stack — Documents the complete existing architecture (CloudFront, WAF, Lambda@Edge, API Gateway, Bedrock Lambda).
+
+Resources:
+  # ───────── Cognito User Pool ─────────
+  SecureViewUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: SecureViewUsers
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+
+  SecureViewUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "secureview-auth-${AWS::AccountId}-dev"
+      UserPoolId: !Ref SecureViewUserPool
+
+  SecureViewUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: SecureViewExtensionClient
+      UserPoolId: !Ref SecureViewUserPool
+      GenerateSecret: false
+      SupportedIdentityProviders:
+        - COGNITO
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      CallbackURLs:
+        - "https://fkjodnfomjpihceinhndmmbkacpnikbe.chromiumapp.org/"
+
+  # ───────── WAFv2 WebACL (Global for CloudFront) ─────────
+  ***REMOVED***WebACL:
+  #   Type: AWS::WAFv2::WebACL
+  #   Properties:
+  #     Name: SecureView-RateLimit-Global
+  #     Scope: CLOUDFRONT
+  #     DefaultAction:
+  #       Allow: {}
+  #     VisibilityConfig:
+  #       CloudWatchMetricsEnabled: true
+  #       MetricName: SecureView-WAF-Global
+  #       SampledRequestsEnabled: true
+  #     Rules:
+  #       - Name: RateLimitByIP
+  #         Priority: 1
+  #         Action:
+  #           Block: {}
+  #         Statement:
+  #           RateBasedStatement:
+  #             Limit: 100
+  #             AggregateKeyType: IP
+  #         VisibilityConfig:
+  #           CloudWatchMetricsEnabled: true
+  #           MetricName: RateLimitRule
+  #           SampledRequestsEnabled: true
+
+  # ───────── Lambda@Edge IAM Role ─────────
+  SecureViewEdgeLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: SecureViewEdgeLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  # ───────── Lambda@Edge Function ─────────
+  SecureViewEdgeLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: svSignedCategorizeRequest
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt SecureViewEdgeLambdaRole.Arn
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        # Code is managed in backend/lambda/lambda_function.py
+        ZipFile: |
+          def lambda_handler(event, context):
+              pass
+
+  # ───────── Lambda Version (Required for CloudFront attachment) ─────────
+  SecureViewEdgeLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref SecureViewEdgeLambda
+      Description: Lambda Edge for SecureView request routing
+
+  # ───────── Bedrock Lambda IAM Role ─────────
+  SecureViewBedrockLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: SecureViewBedrockLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Sid: Bedrock
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  # ───────── Bedrock Lambda Function ─────────
+  SecureViewBedrockLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: svCategorizeURL
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt SecureViewBedrockLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        # Code is managed in backend/lambda/bedrock/lambda_function.py
+        ZipFile: |
+          def lambda_handler(event, context):
+              pass
+
+  SecureViewBedrockLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref SecureViewBedrockLambda
+
+  SecureViewBedrockLambdaProdAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref SecureViewBedrockLambda
+      FunctionVersion: !GetAtt SecureViewBedrockLambdaVersion.Version
+      Name: prod
+
+  SecureViewBedrockLambdaBetaAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref SecureViewBedrockLambda
+      FunctionVersion: !GetAtt SecureViewBedrockLambdaVersion.Version
+      Name: beta
+
+  # ───────── API Gateway (REST API) ─────────
+  SecureViewApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: SecureViewCategorizationAPI
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  SecureViewApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ParentId: !GetAtt SecureViewApiGateway.RootResourceId
+      PathPart: categorize
+
+  SecureViewApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ResourceId: !Ref SecureViewApiGatewayResource
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SecureViewBedrockLambda.Arn}:${!stageVariables.lambdaAlias}/invocations"
+
+  # ───────── Email Lambda ─────────
+  SecureViewEmailLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SecureViewEmailLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cognito-idp:GetUser
+                Resource: "*"
+
+  SecureViewEmailLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: svSendEmailReport
+      Handler: send_email.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt SecureViewEmailLambdaRole.Arn
+      Timeout: 15
+      MemorySize: 128
+      Code:
+        # WARNING: This code is inlined via ZipFile (4KB limit). The authoritative
+        # source is backend/lambda/send_email/send_email.py — keep both in sync.
+        # For larger code, switch to S3-based deployment.
+        ZipFile: |
+          import json, boto3, os, re
+          ses = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'ap-southeast-2'))
+          cog = boto3.client('cognito-idp', region_name=os.environ.get('AWS_REGION', 'ap-southeast-2'))
+          _HEX = re.compile(r'^#[0-9a-fA-F]{6}$')
+          def _esc(s):
+              if s is None: return ""
+              return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+          def _col(c):
+              return str(c) if c and _HEX.match(str(c)) else "#7F8C8D"
+          def lambda_handler(event, context):
+              try:
+                  hdrs = event.get('headers', {}) or {}
+                  auth = hdrs.get('Authorization','') or hdrs.get('authorization','')
+                  token = auth[7:] if auth.startswith('Bearer ') else None
+                  body = json.loads(event.get('body', '{}'))
+                  if not token: token = body.get('accessToken')
+                  if not token: return {'statusCode':401,'body':json.dumps({'message':'Missing authentication'})}
+                  usr = cog.get_user(AccessToken=token)
+                  email = next((a['Value'] for a in usr['UserAttributes'] if a['Name']=='email'), None)
+                  name = next((a['Value'] for a in usr['UserAttributes'] if a['Name']=='name'), 'User')
+                  days = body.get('days', [])
+                  action = body.get('action', 'report')
+                  raw_freq = body.get('frequency', 'weekly')
+                  freq = raw_freq.capitalize() if isinstance(raw_freq, str) and raw_freq.lower() in ('daily', 'weekly') else 'Daily'
+                  if not email: return {'statusCode':400,'body':json.dumps({'message':'User has no email'})}
+                  
+                  if action == 'welcome':
+                      html = f"<html><body><div style='max-width:600px;margin:auto;font-family:sans-serif'><h2>Welcome to SecureView, {_esc(name)}!</h2><p>Thanks for installing SecureView. We're excited to help you understand your browsing habits.</p><p><b>What to expect:</b></p><ul><li><b>Daily Tracking:</b> We'll automatically categorize your web activity using AI.</li><li><b>Regular Reports:</b> You'll receive emails like this one, summarizing your browsing time across different categories.</li><li><b>Privacy First:</b> Your detailed browsing history stays on your device. We only send summarized category data to generate your reports.</li></ul><p>Happy browsing!</p></div></body></html>"
+                      subject = 'Welcome to SecureView!'
+                  elif action == 'report':
+                      tot = sum(d.get('totalSeconds',0) for d in days)
+                      html = f"<html><body><div style='max-width:600px;margin:auto;font-family:sans-serif'><h2>SecureView {freq} Report for {_esc(name)}</h2><p>Total: <b>{tot/3600:.1f}h</b></p>"
+                      for day in days:
+                          dt, ds = _esc(day.get('label','')), day.get('totalSeconds',0)
+                          cats = day.get('categories',{})
+                          bar = ""
+                          for cn, cd in cats.items():
+                              if ds > 0:
+                                  p = (cd.get('seconds',0)/ds)*100
+                                  if p > 0: bar += f'<div style="width:{p:.0f}%;background:{_col(cd.get("color"))};height:100%;display:inline-block" title="{_esc(cn)}"></div>'
+                          html += f"<div style='background:#f8fafc;border:1px solid #e2e8f0;padding:12px;margin:8px 0;border-radius:8px'><b>{dt}</b> {ds//3600}h {(ds%3600)//60}m<div style='height:20px;border-radius:4px;overflow:hidden;margin-top:6px'>{bar}</div></div>"
+                      html += "</div></body></html>"
+                      subject = 'Your SecureView Browsing Report'
+                  else:
+                      return {'statusCode':400,'body':json.dumps({'message':'Invalid action'})}
+                  
+                  ses.send_email(Source=email,Destination={'ToAddresses':[email]},Message={'Subject':{'Data':subject},'Body':{'Html':{'Data':html}}})
+                  return {'statusCode':200,'body':json.dumps({'message':'Email sent'})}
+              except cog.exceptions.NotAuthorizedException:
+                  return {'statusCode':401,'body':json.dumps({'message':'Invalid or expired token'})}
+              except Exception as e:
+                  print(f"Email error: {e}")
+                  return {'statusCode':500,'body':json.dumps({'message':'Internal error'})}
+
+  SecureViewEmailApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ParentId: !GetAtt SecureViewApiGateway.RootResourceId
+      PathPart: report
+
+  SecureViewEmailApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ResourceId: !Ref SecureViewEmailApiGatewayResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SecureViewEmailLambda.Arn}/invocations"
+
+  # OPTIONS method for CORS preflight on /report
+  SecureViewEmailApiGatewayOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      ResourceId: !Ref SecureViewEmailApiGatewayResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  SecureViewEmailLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt SecureViewEmailLambda.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/report"
+
+  SecureViewApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - SecureViewApiGatewayMethod
+      - SecureViewEmailApiGatewayMethod
+      - SecureViewEmailApiGatewayOptionsMethod
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+
+  SecureViewApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      DeploymentId: !Ref SecureViewApiGatewayDeployment
+      StageName: prod
+      Variables:
+        lambdaAlias: prod
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+
+  SecureViewApiGatewayBetaStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref SecureViewApiGateway
+      DeploymentId: !Ref SecureViewApiGatewayDeployment
+      StageName: beta
+      Variables:
+        lambdaAlias: beta
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+
+  # ───────── Lambda Permissions for API Gateway (Aliases) ─────────
+  SecureViewBedrockLambdaProdPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: SecureViewBedrockLambdaProdAlias
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub "${SecureViewBedrockLambda.Arn}:prod"
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/categorize"
+
+  SecureViewBedrockLambdaBetaPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: SecureViewBedrockLambdaBetaAlias
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub "${SecureViewBedrockLambda.Arn}:beta"
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/categorize"
+
+  # ───────── CloudFront Distribution ─────────
+  SecureViewDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: SecureView AI Categorization API
+        # WebACLId: !GetAtt SecureViewWebACL.Arn
+        Origins:
+          - Id: SecureViewApiGatewayOrigin
+            DomainName: !Sub "${SecureViewApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPPort: 80
+              HTTPSPort: 443
+          - Id: SecureViewApiGatewayBetaOrigin
+            DomainName: !Sub "${SecureViewApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPPort: 80
+              HTTPSPort: 443
+        CacheBehaviors:
+          - TargetOriginId: SecureViewApiGatewayBetaOrigin
+            PathPattern: "/beta/*"
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+            # LambdaFunctionAssociations:
+            #   - EventType: origin-request
+            #     LambdaFunctionARN: !Ref SecureViewEdgeLambdaVersion
+            #     IncludeBody: true
+        DefaultCacheBehavior:
+          TargetOriginId: SecureViewApiGatewayOrigin
+          ViewerProtocolPolicy: https-only
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          # LambdaFunctionAssociations:
+          #   - EventType: origin-request
+          #     LambdaFunctionARN: !Ref SecureViewEdgeLambdaVersion
+          #     IncludeBody: true
+
+Outputs:
+  DistributionDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt SecureViewDistribution.DomainName
+  
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref SecureViewUserPool
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref SecureViewUserPoolClient
+
+  CognitoDomain:
+    Description: Cognito Auth Domain
+    Value: !Sub "secureview-auth-${AWS::AccountId}-dev.auth.${AWS::Region}.amazoncognito.com"

@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="icon" type="image/x-icon" href="https://secureview.websaleem.com/images/icon.ico">
+    <title>SecureView | Installation Successful</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --bg-light: #f8fafc;
+            --bg-white: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --success: #10b981;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: var(--text-main);
+            background-color: var(--bg-light);
+            line-height: 1.6;
+        }
+        nav {
+            background: var(--bg-white);
+            padding: 1rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .logo { font-size: 1.5rem; font-weight: 800; color: var(--primary); }
+        .nav-links a { margin-left: 2rem; text-decoration: none; color: var(--text-muted); font-weight: 500; }
+        .nav-links a:hover { color: var(--primary); }
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: var(--primary); color: white; border: none; }
+        
+        .success-container {
+            display: flex;
+            max-width: 1200px;
+            margin: 4rem auto;
+            gap: 4rem;
+            padding: 0 5%;
+            align-items: center;
+        }
+        .success-content {
+            flex: 1;
+        }
+        .success-content h1 {
+            font-size: 3rem;
+            color: var(--success);
+            margin-bottom: 1rem;
+            line-height: 1.1;
+        }
+        .success-content p {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+        
+        /* Form styling from the extension but adapted for light mode */
+        .form-container {
+            flex: 0 0 450px;
+            background: var(--bg-white);
+            padding: 2.5rem;
+            border-radius: 24px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+            border: 1px solid #e2e8f0;
+        }
+        .form-container h2 { margin-bottom: 0.5rem; }
+        .form-container p.subtitle { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.95rem; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.25rem; font-size: 0.9rem; font-weight: 600; }
+        .form-group input[type="text"],
+        .form-group input[type="email"],
+        .form-group input[type="password"] {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-family: inherit;
+        }
+        .form-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+        
+        .radio-group { display: flex; gap: 1rem; margin-top: 0.25rem; }
+        .radio-group label { display: flex; align-items: center; gap: 0.5rem; font-weight: normal; cursor: pointer; }
+        
+        .submit-btn {
+            width: 100%;
+            padding: 0.875rem;
+            background: var(--success);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 1rem;
+            transition: background 0.2s;
+        }
+        .submit-btn:hover { background: #059669; }
+        .submit-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+        
+        .error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 0.5rem; display: none; }
+        .hidden { display: none !important; }
+        
+        .switch-link {
+            display: block;
+            text-align: center;
+            margin-top: 1rem;
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        .switch-link:hover { text-decoration: underline; }
+
+        @media (max-width: 768px) {
+            .success-container { flex-direction: column; text-align: center; }
+            .form-container { flex: 1; width: 100%; max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="logo">
+			<img src="https://secureview.websaleem.com/images/icon.png" alt="SecureView Logo" style="height: 32px; width: auto; vertical-align: middle; margin-right: 8px;"> SecureView
+		</div>
+        <div class="nav-links">
+            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+            <a href="contact-support.html">Contact Support</a>
+        </div>
+    </nav>
+
+    <div class="success-container">
+        <div class="success-content">
+            <h1>Installation<br>Successful! 🎉</h1>
+            <p>SecureView is now active in your browser.</p>
+            <p>To start tracking your browsing intelligence, please sign up or log in to sync your account with the extension.</p>
+            <div id="auth-success-state" class="hidden">
+                <div style="display:inline-block; padding: 1rem 2rem; background: #d1fae5; color: #065f46; border-radius: 12px; font-weight: 600;">
+                    <i class="fas fa-check-circle"></i> Account linked! You can now close this tab.
+                </div>
+            </div>
+        </div>
+
+        <!-- AUTH FORMS -->
+        <div class="form-container" id="auth-forms">
+            
+            <!-- SIGNUP FORM -->
+            <div id="signup-form">
+                <h2>Create Account</h2>
+                <p class="subtitle">Join SecureView today</p>
+
+                <div class="form-group">
+                    <label>Full Name</label>
+                    <input type="text" id="signup-name" placeholder="Jane Doe" />
+                </div>
+                <div class="form-group">
+                    <label>Account Type</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="accountType" value="Adult" checked> Adult</label>
+                        <label><input type="radio" name="accountType" value="Child"> Child</label>
+                    </div>
+                </div>
+                <div class="form-group hidden" id="parentNameGroup">
+                    <label>Parent Full Name</label>
+                    <input type="text" id="signup-parent" placeholder="John Doe" />
+                </div>
+                <div class="form-group">
+                    <label>Email Address</label>
+                    <input type="email" id="signup-email" placeholder="jane@example.com" />
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="signup-password" placeholder="••••••••" />
+                </div>
+                <button class="submit-btn" id="signup-btn">Sign Up</button>
+                <div class="error-msg" id="signup-error"></div>
+                <a href="#" class="switch-link" id="show-login">Already have an account? Log In</a>
+            </div>
+
+            <!-- VERIFY FORM -->
+            <div id="verify-form" class="hidden">
+                <h2>Check Your Email</h2>
+                <p class="subtitle">Enter the verification code sent to your email.</p>
+                <div class="form-group">
+                    <label>Verification Code</label>
+                    <input type="text" id="verify-code" placeholder="123456" />
+                </div>
+                <button class="submit-btn" id="verify-btn">Verify Account</button>
+                <div class="error-msg" id="verify-error"></div>
+            </div>
+
+            <!-- LOGIN FORM -->
+            <div id="login-form" class="hidden">
+                <h2>Welcome Back</h2>
+                <p class="subtitle">Log in to SecureView</p>
+                <div class="form-group">
+                    <label>Email Address</label>
+                    <input type="email" id="login-email" placeholder="jane@example.com" />
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password" placeholder="••••••••" />
+                </div>
+                <button class="submit-btn" id="login-btn">Log In</button>
+                <div class="error-msg" id="login-error"></div>
+                <a href="#" class="switch-link" id="show-signup">Need an account? Sign Up</a>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const CLIENT_ID = "jhqactee45fkp0etm1ng2ks5m";
+        const REGION = "ap-southeast-2";
+        const EXTENSION_ID = "fkjodnfomjpihceinhndmmbkacpnikbe"; // Local Dev Extension ID (change if published)
+        
+        // AWS Cognito HTTP API utility
+        async function cognitoRequest(target, payload) {
+            const res = await fetch(`https://cognito-idp.${REGION}.amazonaws.com/`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-amz-json-1.1",
+                    "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`
+                },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || data.__type || "Unknown error");
+            return data;
+        }
+
+        async function sendTokensToExtension(accessToken, idToken) {
+            return new Promise((resolve, reject) => {
+                // If not running in Chrome extension environment context, just mock it (or try anyway)
+                if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
+                    chrome.runtime.sendMessage(EXTENSION_ID, {
+                        type: "AUTH_SUCCESS",
+                        tokens: { accessToken, idToken }
+                    }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.warn("Could not communicate with extension. Is it installed?", chrome.runtime.lastError.message);
+                            resolve(false);
+                        } else {
+                            resolve(true);
+                        }
+                    });
+                } else {
+                    console.warn("Chrome extension API not available.");
+                    resolve(false);
+                }
+            });
+        }
+
+        function showSuccessState() {
+            document.getElementById('auth-forms').classList.add('hidden');
+            document.getElementById('auth-success-state').classList.remove('hidden');
+        }
+
+        // UI Toggles
+        document.querySelectorAll('input[name="accountType"]').forEach(r => {
+            r.addEventListener('change', e => {
+                document.getElementById('parentNameGroup').classList.toggle('hidden', e.target.value !== 'Child');
+            });
+        });
+
+        document.getElementById('show-login').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('signup-form').classList.add('hidden');
+            document.getElementById('login-form').classList.remove('hidden');
+        });
+
+        document.getElementById('show-signup').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('login-form').classList.add('hidden');
+            document.getElementById('signup-form').classList.remove('hidden');
+        });
+
+        // Store signup details for verification
+        let pendingEmail = "";
+        let pendingPassword = "";
+
+        // Sign Up
+        document.getElementById('signup-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('signup-btn');
+            const err = document.getElementById('signup-error');
+            err.style.display = 'none';
+
+            const name = document.getElementById('signup-name').value.trim();
+            const email = document.getElementById('signup-email').value.trim();
+            const password = document.getElementById('signup-password').value;
+            const type = document.querySelector('input[name="accountType"]:checked').value;
+            const parent = document.getElementById('signup-parent').value.trim();
+
+            if (!name || !email || !password) return err.textContent = "Please fill all required fields.", err.style.display = 'block';
+            if (type === 'Child' && !parent) return err.textContent = "Parent name required.", err.style.display = 'block';
+
+            btn.disabled = true;
+            btn.textContent = "Creating...";
+
+            try {
+                const attrs = [
+                    { Name: "name", Value: name },
+                    { Name: "custom:account_type", Value: type }
+                ];
+                if (type === 'Child') attrs.push({ Name: "custom:parent_name", Value: parent });
+
+                await cognitoRequest("SignUp", {
+                    ClientId: CLIENT_ID,
+                    Username: email,
+                    Password: password,
+                    UserAttributes: attrs
+                });
+                
+                pendingEmail = email;
+                pendingPassword = password;
+                document.getElementById('signup-form').classList.add('hidden');
+                document.getElementById('verify-form').classList.remove('hidden');
+            } catch (e) {
+                err.textContent = e.message;
+                err.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Sign Up";
+            }
+        });
+
+        // Verify Account
+        document.getElementById('verify-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('verify-btn');
+            const err = document.getElementById('verify-error');
+            err.style.display = 'none';
+            const code = document.getElementById('verify-code').value.trim();
+            
+            if (!code) return err.textContent = "Code required.", err.style.display = 'block';
+
+            btn.disabled = true;
+            btn.textContent = "Verifying...";
+
+            try {
+                await cognitoRequest("ConfirmSignUp", {
+                    ClientId: CLIENT_ID,
+                    Username: pendingEmail,
+                    ConfirmationCode: code
+                });
+                
+                // Auto Login
+                const authRes = await cognitoRequest("InitiateAuth", {
+                    AuthFlow: "USER_PASSWORD_AUTH",
+                    ClientId: CLIENT_ID,
+                    AuthParameters: { USERNAME: pendingEmail, PASSWORD: pendingPassword }
+                });
+
+                if (authRes.AuthenticationResult) {
+                    await sendTokensToExtension(authRes.AuthenticationResult.AccessToken, authRes.AuthenticationResult.IdToken);
+                    showSuccessState();
+                }
+            } catch (e) {
+                err.textContent = e.message;
+                err.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = "Verify Account";
+            }
+        });
+
+        // Log In
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('login-btn');
+            const err = document.getElementById('login-error');
+            err.style.display = 'none';
+            
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+
+            if (!email || !password) return err.textContent = "Email and Password required.", err.style.display = 'block';
+
+            btn.disabled = true;
+            btn.textContent = "Logging In...";
+
+            try {
+                const authRes = await cognitoRequest("InitiateAuth", {
+                    AuthFlow: "USER_PASSWORD_AUTH",
+                    ClientId: CLIENT_ID,
+                    AuthParameters: { USERNAME: email, PASSWORD: password }
+                });
+
+                if (authRes.AuthenticationResult) {
+                    await sendTokensToExtension(authRes.AuthenticationResult.AccessToken, authRes.AuthenticationResult.IdToken);
+                    showSuccessState();
+                } else if (authRes.ChallengeName) {
+                    err.textContent = `Unsupported challenge: ${authRes.ChallengeName}`;
+                    err.style.display = 'block';
+                }
+            } catch (e) {
+                if (e.message.includes("User is not confirmed")) {
+                    pendingEmail = email;
+                    pendingPassword = password;
+                    document.getElementById('login-form').classList.add('hidden');
+                    document.getElementById('verify-form').classList.remove('hidden');
+                } else {
+                    err.textContent = e.message;
+                    err.style.display = 'block';
+                }
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Log In";
+            }
+        });
+
+    </script>
+</body>
+</html>

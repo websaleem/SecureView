@@ -107,30 +107,74 @@ The notify job runs `if: always()` after the publish step, so you'll get a "succ
 
 ### End-to-End Flow
 
-```mermaid
-flowchart TD
-    subgraph Extension["Chrome Extension"]
-        CS["content_script.js\n• Sends title on doc ready\n• Watches &lt;title&gt; for SPA changes"]
-        SW["background.js (Service Worker)\n• Tracks active tab & dwell time\n• Eager categorize on PAGE_READY\n• Flushes every 60s"]
-        Popup["popup.html / js\n• Category + site views\n• Today / 7-day breakdown\n• Live-updates via storage.onChanged"]
-        Cat["categorizer.js\n1. Rule-based (categories.js)\n2. AI fallback for 'Other'"]
-        
-        CS -- "PAGE_READY (title+url)\nUSER_ACTIVE" --> SW
-        SW -- "categorize" --> Cat
-        SW -- "storage update" --> Popup
-    end
-    
-    subgraph AWS["AWS Backend"]
-        CF["CloudFront Distribution\n(WAF Rate Limit)"]
-        LE["Lambda@Edge (origin-request)\n• Signs Request with AWS IAM (SigV4)"]
-        API["API Gateway\n(IAM Auth)"]
-        Lambda["Lambda\n(classifier)"]
-        Bedrock["Amazon Bedrock\n(AI category inference)"]
-        
-        CF --> LE --> API --> Lambda --> Bedrock
-    end
-
-    Cat -- "HTTPS" --> CF
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Chrome Extension                          │
+│                                                                  │
+│  ┌─────────────────┐  PAGE_READY      ┌──────────────────────┐  │
+│  │ content_        │  (title+url)     │ background.js        │  │
+│  │ script.js       │ ───────────────▶ │ (Service Worker)     │  │
+│  │                 │  USER_ACTIVE     │                      │  │
+│  │ • Sends title   │ ───────────────▶ │ • Tracks active tab  │  │
+│  │   on doc ready  │                  │ • Measures dwell time│  │
+│  │ • Watches <title│                  │ • Eager categorize   │  │
+│  │   > for SPA     │                  │   on PAGE_READY      │  │
+│  │   changes       │                  │ • Flushes every 60s  │  │
+│  └─────────────────┘                  └──────────┬───────────┘  │
+│                                                  │              │
+│  ┌──────────────────────────────────────┐        │ categorize   │
+│  │ popup.html / popup.js / popup.css    │        ▼              │
+│  │                                      │  ┌─────────────────┐  │
+│  │ • Category + site views              │  │ categorizer.js  │  │
+│  │ • Today / 7-day + per-day breakdown  │  │                 │  │
+│  │ • Live-updates via                   │  │ 1. Rule-based   │  │
+│  │   storage.onChanged                  │  │    (categories  │  │
+│  └──────────────────────────────────────┘  │    .js)         │  │
+│           ▲  storage update                │ 2. AI fallback  │  │
+│           └────────────────────────────────│    for "Other"  │  │
+│                                            └────────┬────────┘  │
+│  ┌──────────────────────────────────────┐           │           │
+│  │ shared/logger.js                     │           │           │
+│  │ shared/categories.js                 │           │           │
+│  └──────────────────────────────────────┘           │           │
+└────────────────────────────────────────────────────┼────────────┘
+                                                      │ HTTPS
+                                                      │
+                                                      ▼
+                                             ┌─────────────────┐
+                                             │   CloudFront    │
+                                             │  Distribution   │
+                                             │ (WAF Rate Limit)│
+                                             └────────┬────────┘
+                                                      │
+                                                      ▼
+                                             ┌─────────────────┐
+                                             │  Lambda@Edge    │
+                                             │ origin-request  │
+                                             │                 │
+                                             │ • Signs Request │
+                                             │   with AWS IAM  │
+                                             │   (SigV4)       │
+                                             └────────┬────────┘
+                                                      │
+                                                      ▼
+                                             ┌─────────────────┐
+                                             │   API Gateway   │
+                                             │   (IAM Auth)    │
+                                             └────────┬────────┘
+                                                      │
+                                                      ▼
+                                             ┌─────────────────┐
+                                             │     Lambda      │
+                                             │  (classifier)   │
+                                             └────────┬────────┘
+                                                      │
+                                                      ▼
+                                             ┌─────────────────┐
+                                             │  Amazon Bedrock │
+                                             │ (AI category    │
+                                             │  inference)     │
+                                             └─────────────────┘
 ```
 
 The AI pipeline is only invoked for domains that fall through rule-based matching as "Other" (or for all domains when `force_cloudfront` is enabled). Results are cached in `chrome.storage.local` under `br_cat_cache` so each domain is classified at most once. The backend is protected by a global AWS WAF rate limit on CloudFront, and Lambda@Edge securely signs the request using AWS IAM (SigV4) before forwarding it to API Gateway.
@@ -141,7 +185,7 @@ Categorization is triggered **immediately** when the content script sends `PAGE_
 
 The extension has four runtime components that communicate via Chrome APIs:
 
-**`background/background.js` (Service Worker)** — The core tracking engine. Maintains session state in `chrome.storage.session` (key: `sv_session`) so it survives service worker restarts. Tracks active tab, window focus, and idle state. On every tab switch or `PAGE_READY` message it calls `triggerEagerCategorization()`, which immediately classifies the URL+title and writes the result to the domain entry — no waiting for the alarm. Flushes accumulated dwell time to `chrome.storage.local` every 60 seconds via an alarm, and also on every tab switch. On first install (`onInstalled` reason `"install"`) opens `https://www.websaleem.com/secureview/success.html` in a new tab. `setUninstallURL` points to `https://www.websaleem.com/secureview/uninstall.html` so Chrome opens it automatically when the extension is removed.
+**`background/background.js` (Service Worker)** — The core tracking engine. Maintains session state in `chrome.storage.session` (key: `sv_session`) so it survives service worker restarts. Tracks active tab, window focus, and idle state. On every tab switch or `PAGE_READY` message it calls `triggerEagerCategorization()`, which immediately classifies the URL+title and writes the result to the domain entry — no waiting for the alarm. Flushes accumulated dwell time to `chrome.storage.local` every 60 seconds via an alarm, and also on every tab switch. On first install (`onInstalled` reason `"install"`) opens `https://secureview.websaleem.com/success.html` in a new tab. `setUninstallURL` points to `https://secureview.websaleem.com/uninstall.html` so Chrome opens it automatically when the extension is removed.
 
 **`content/content_script.js`** — Injected into all pages. Sends `PAGE_READY` (`{ title, url }`) to the background as soon as `document` load fires; re-sends whenever the `<title>` element changes (MutationObserver) to catch SPA navigation; re-sends on `visibilitychange` when the tab becomes visible again. Also detects user activity (mouse, keyboard, scroll) and sends `USER_ACTIVE` every 10 seconds while active.
 
@@ -154,8 +198,6 @@ The extension has four runtime components that communicate via Chrome APIs:
 **`shared/categorizer.js`** — Imported by `background.js` via `importScripts`. Provides `categorizeUrlEnhanced(url, title)`, an async drop-in for `categorizeUrl()`. Rule-based first; for "Other" domains it calls a CloudFront distribution. Flow: `CloudFront (WAF) → Lambda@Edge (origin-request signs request) → API Gateway → Lambda → Bedrock`. Before the request leaves the device, `_safeUrlForApi(url)` strips the query string and fragment so only `protocol://host/path` is sent — query params and hashes are where session tokens, search terms, and PII tend to sit. Retries up to 2× with exponential backoff to handle Lambda@Edge cold starts. Results cached under `br_cat_cache`. Fails silently if unreachable.
 
 AWS setup required (per env): AWS WAF rate limit rule; CloudFront distribution pointing to API Gateway as origin; Lambda@Edge origin-request function that signs the request with AWS IAM; API Gateway with IAM authorization; Lambda function that calls Amazon Bedrock for classification.
-
-**For full backend deployment instructions and CloudFormation templates, see the `backend/` directory.**
 
 ### Runtime Settings Flags
 

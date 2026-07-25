@@ -7,8 +7,16 @@
     "tabs",
     "storage",
     "alarms",
-    "idle"
+    "idle",
+    "identity"
   ],
+  "externally_connectable": {
+    "matches": [
+      "*://*.websaleem.com/*",
+      "*://localhost/*",
+      "*://127.0.0.1/*"
+    ]
+  },
   "host_permissions": [
     "<all_urls>"
   ],

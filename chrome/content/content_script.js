@@ -28,12 +28,16 @@
     window.addEventListener("load", () => reportTitle("load"), { once: true });
   }
 
-  // Watch for SPA title changes (Gmail, Twitter, etc.). Observe documentElement
-  // rather than the current <title> node so we still fire when the title element
-  // itself is removed and replaced (react-helmet, Vue head libs, etc.).
+  // Watch for SPA title changes (Gmail, Twitter, etc.). Observe only <head>
+  // rather than the entire DOM tree — the <title> element lives in <head>, so
+  // this covers re-renders while avoiding the performance cost of firing on
+  // every body mutation (heavy SPAs can trigger thousands per second).
   // reportTitle dedupes via _lastReportedTitle, so spurious fires are no-ops.
-  new MutationObserver(() => reportTitle("mutation"))
-    .observe(document.documentElement, { childList: true, characterData: true, subtree: true });
+  const headEl = document.head || document.querySelector('head');
+  if (headEl) {
+    new MutationObserver(() => reportTitle("mutation"))
+      .observe(headEl, { childList: true, characterData: true, subtree: true });
+  }
 
   // ─── Activity reporting ──────────────────────────────────────────────────────
 

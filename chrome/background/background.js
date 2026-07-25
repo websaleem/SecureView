@@ -1,6 +1,7 @@
 // SecureView Background Service Worker
 // Tracks active browsing time per URL/domain
 
+importScripts("../shared/config.js");
 importScripts("../shared/categories.js");
 importScripts("../shared/categorizer.js");
 importScripts("../shared/logger.js");
@@ -36,6 +37,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && EXCLUDED_DOMAINS_KEY in changes) {
     _excludedDomains = new Set(changes[EXCLUDED_DOMAINS_KEY].newValue || []);
     Logger.info(LOG, `Excluded domains updated: ${[..._excludedDomains].join(", ") || "none"}`);
+  }
+  if (area === "local" && "emailReportFreq" in changes) {
+    const freq = changes.emailReportFreq.newValue || "daily";
+    if (freq === "none") {
+      chrome.alarms.clear("email-report");
+      Logger.info(LOG, `Email report frequency changed to none (alarm cleared)`);
+    } else {
+      const mins = freq === "daily" ? 1440 : 10080;
+      chrome.alarms.create("email-report", { periodInMinutes: mins });
+      Logger.info(LOG, `Email report frequency changed to ${freq} (${mins} mins)`);
+    }
   }
 });
 
@@ -380,13 +392,32 @@ chrome.idle.onStateChanged.addListener(async (state) => {
 
 // Alarm: minimum 1 minute in Chrome MV3
 chrome.alarms.create("tick", { periodInMinutes: 1 });
+chrome.alarms.clear("daily-report");
+chrome.alarms.clear("weekly-report");
+chrome.alarms.get("email-report", (alarm) => {
+  chrome.storage.local.get(["emailReportFreq"], (res) => {
+    const freq = res.emailReportFreq || "daily";
+    if (freq === "none") {
+      if (alarm) chrome.alarms.clear("email-report");
+    } else if (!alarm) {
+      const mins = freq === "daily" ? 1440 : 10080;
+      chrome.alarms.create("email-report", { periodInMinutes: mins });
+    }
+  });
+});
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== "tick") return;
-  await ready();
-  Logger.debug(LOG, "Alarm tick");
-  await ensureTracking();      // Re-establish tracking if SW was restarted
-  await flushTime(currentUrl); // Flush accumulated time to storage
-  await pruneOldData();        // Drop data_* keys past the retention window
+  if (alarm.name === "tick") {
+    await ready();
+    Logger.debug(LOG, "Alarm tick");
+    await ensureTracking();      // Re-establish tracking if SW was restarted
+    await flushTime(currentUrl); // Flush accumulated time to storage
+    await pruneOldData();        // Drop data_* keys past the retention window
+  } else if (alarm.name === "email-report") {
+    await ready();
+    Logger.info(LOG, "Running email report");
+    await sendEmailReport();
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
@@ -418,6 +449,9 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
       }
       triggerEagerCategorization(senderUrl, title);
     });
+  } else if (message.type === "SIGNUP_SUCCESS") {
+    Logger.info(LOG, "SIGNUP_SUCCESS received, sending welcome email");
+    sendWelcomeEmail();
   }
   return false;
 });
@@ -455,12 +489,187 @@ async function init() {
   Logger.info(LOG, "Extension initialized");
 }
 
-chrome.runtime.setUninstallURL("https://www.websaleem.com/secureview/uninstall.html");
+chrome.runtime.setUninstallURL("https://secureview.websaleem.com/uninstall.html");
+
+const COGNITO_DOMAIN = SV_CONFIG.COGNITO_DOMAIN;
+const CLIENT_ID = SV_CONFIG.COGNITO_CLIENT_ID;
+const REDIRECT_URI = `https://${chrome.runtime.id}.chromiumapp.org/`;
 
 chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === "install") {
-    chrome.tabs.create({ url: "https://www.websaleem.com/secureview/success.html" });
+  if (details.reason === chrome.runtime.OnInstalledReason.INSTALL || details.reason === "install") {
+    // Open the external success page
+    chrome.tabs.create({ url: "https://secureview.websaleem.com/installsuccess.html" });
   }
   init();
 });
+
+// Listen for messages from the external website (e.g. auth tokens)
+const ALLOWED_AUTH_ORIGINS = [
+  "https://www.websaleem.com",
+  "https://websaleem.com"
+];
+
+chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
+  // Validate sender origin before processing auth tokens
+  const senderOrigin = sender.url ? new URL(sender.url).origin : "";
+  if (!ALLOWED_AUTH_ORIGINS.includes(senderOrigin)) {
+    Logger.warn(LOG, `Rejected external message from untrusted origin: ${senderOrigin}`);
+    sendResponse({ success: false, error: "Untrusted origin" });
+    return true;
+  }
+
+  if (request.type === "AUTH_SUCCESS" && request.tokens) {
+    Logger.info(LOG, "Received auth tokens from external website");
+    chrome.storage.local.set({
+      accessToken: request.tokens.accessToken,
+      idToken: request.tokens.idToken,
+      refreshToken: request.tokens.refreshToken || ""
+    }, () => {
+      sendResponse({ success: true });
+      // Send welcome email after tokens are saved
+      sendWelcomeEmail();
+    });
+    return true; // Keep message channel open for async sendResponse
+  }
+});
 chrome.runtime.onStartup.addListener(init);
+
+// ─── Token refresh ────────────────────────────────────────────────────────────
+// Cognito access tokens expire after ~1 hour. This function uses the stored
+// refresh token to obtain a new access token transparently.
+
+async function refreshAccessToken() {
+  const stored = await chrome.storage.local.get(['refreshToken']);
+  if (!stored.refreshToken) {
+    Logger.warn(LOG, "No refresh token available — user must re-login");
+    return null;
+  }
+
+  try {
+    const res = await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-amz-json-1.1",
+        "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+      },
+      body: JSON.stringify({
+        AuthFlow: "REFRESH_TOKEN_AUTH",
+        ClientId: SV_CONFIG.COGNITO_CLIENT_ID,
+        AuthParameters: {
+          REFRESH_TOKEN: stored.refreshToken
+        }
+      })
+    });
+
+    if (!res.ok) {
+      Logger.warn(LOG, `Token refresh failed: HTTP ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const result = data.AuthenticationResult;
+    if (result?.AccessToken) {
+      await chrome.storage.local.set({
+        accessToken: result.AccessToken,
+        idToken: result.IdToken || (await chrome.storage.local.get(['idToken'])).idToken
+      });
+      Logger.info(LOG, "Access token refreshed successfully");
+      return result.AccessToken;
+    }
+  } catch (e) {
+    Logger.warn(LOG, "Token refresh error", e?.message);
+  }
+  return null;
+}
+
+async function getValidAccessToken() {
+  const stored = await chrome.storage.local.get(['accessToken']);
+  if (!stored.accessToken) return null;
+
+  // Try using the current token first; if Cognito rejects it, refresh
+  try {
+    await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-amz-json-1.1",
+        "X-Amz-Target": "AWSCognitoIdentityProviderService.GetUser"
+      },
+      body: JSON.stringify({ AccessToken: stored.accessToken })
+    }).then(r => { if (!r.ok) throw new Error(r.status); });
+    return stored.accessToken;
+  } catch {
+    Logger.info(LOG, "Access token expired, attempting refresh");
+    return await refreshAccessToken();
+  }
+}
+
+// ─── Email report ───────────────────────────────────────────────────────
+
+async function sendEmailReport() {
+  const accessToken = await getValidAccessToken();
+  if (!accessToken) return;
+  
+  const config = getCFConfig();
+  
+  const { emailReportFreq } = await chrome.storage.local.get(["emailReportFreq"]);
+  const freq = emailReportFreq || "daily";
+  if (freq === "none") return;
+  const numDays = freq === "daily" ? 1 : 7;
+
+  // Gather last `numDays` of browsing data
+  const data = await chrome.storage.local.get(null);
+  const keys = Object.keys(data).filter(k => k.startsWith("data_")).sort().reverse();
+  const days = keys.slice(0, numDays).map(k => {
+    const [, year, month, day] = k.split("_");
+    const d = new Date(year, month - 1, day);
+    const label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    return { label, totalSeconds: data[k].totalSeconds || 0, categories: data[k].categories || {} };
+  });
+
+  const apiUrl = config?.reportUrl;
+  if (!apiUrl || _isPlaceholderUrl(apiUrl)) return;
+
+  try {
+    const res = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
+      body: JSON.stringify({ days, frequency: freq, action: "report" })
+    });
+    if (res.ok) {
+      Logger.info("REPORT", "Email report sent successfully");
+    } else {
+      Logger.warn("REPORT", "Failed to send email report", res.status);
+    }
+  } catch(e) {
+    Logger.warn("REPORT", "Error sending email report", e?.message);
+  }
+}
+
+// ─── Welcome Email ────────────────────────────────────────────────────────────
+
+async function sendWelcomeEmail() {
+  const accessToken = await getValidAccessToken();
+  if (!accessToken) return;
+
+  const config = getCFConfig();
+  const apiUrl = config?.reportUrl;
+  if (!apiUrl || _isPlaceholderUrl(apiUrl)) return;
+
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ action: 'welcome' })
+    });
+    if (res.ok) {
+      Logger.info("REPORT", "Welcome email sent successfully");
+    } else {
+      Logger.warn("REPORT", "Failed to send welcome email", res.status);
+    }
+  } catch(e) {
+    Logger.warn("REPORT", "Error sending welcome email", e?.message);
+  }
+}

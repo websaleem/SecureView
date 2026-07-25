@@ -41,11 +41,18 @@ const RETRY_BASE_MS    = 500;  // exponential backoff: 500 ms, 1000 ms
 // here (and update the validator) if you ever rotate one without the other.
 
 const CF_CONFIG = {
-  url: "https://your-cloudfront-id.cloudfront.net/categorize"
+  url: "https://secureview-dev-cdn.cloudfront.net/categorize",
+  reportUrl: "https://secureview-dev-cdn.cloudfront.net/report"
 };
 
 function getCFConfig() {
   return CF_CONFIG;
+}
+
+// Returns true if the given URL is still a placeholder and should not be called.
+function _isPlaceholderUrl(url) {
+  if (!url) return true;
+  return /your-cloudfront-id|<.*>|example\.com/.test(url);
 }
 
 // Strip query and fragment before sending the URL to the categorize endpoint.
@@ -114,7 +121,7 @@ async function classifyWithCloudFront(url, hostname, title) {
   }
 
   const config = getCFConfig();
-  if (!config?.url || config.url.includes("<")) {
+  if (_isPlaceholderUrl(config?.url)) {
     Logger.debug(LOG_CAT, `CloudFront not configured — skipping ML classification for: ${hostname}`);
     return null;
   }

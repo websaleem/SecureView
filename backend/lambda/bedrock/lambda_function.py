@@ -178,7 +178,7 @@ def lambda_handler(event, context):
             "error_type":    type(e).__name__,
             "error":         str(e),
         }))
-        return _resp(500, {"error": str(e)})
+        return _resp(500, {"error": "An internal error occurred"})
 
 
 def _resp(status: int, body: dict) -> dict:

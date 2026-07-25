@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SecureView - Login</title>
+  <link rel="stylesheet" href="popup.css">
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background-color: #1a1a1a;
+      color: #fff;
+    }
+    .login-container {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 32px;
+      border-radius: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      width: 300px;
+    }
+    .title {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: rgba(255, 255, 255, 0.6);
+      margin-bottom: 24px;
+      font-size: 14px;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 16px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 16px;
+      color: white;
+      box-sizing: border-box;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    .error {
+      color: #ff5252;
+      font-size: 12px;
+      margin-top: 12px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="title">SecureView</div>
+    <div class="subtitle">Please log in to continue</div>
+    <input type="text" id="username" placeholder="Email" />
+    <input type="password" id="password" placeholder="Password" />
+    <button id="login-btn">Log In</button>
+    <div class="error" id="error-msg"></div>
+    <a href="signup.html" style="display:block; text-align:center; margin-top:16px; color:#4CAF50; text-decoration:none; font-size:13px;">Don't have an account? Sign Up</a>
+  </div>
+  <script src="login.bundle.js"></script>
+</body>
+</html>

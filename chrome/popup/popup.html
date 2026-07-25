@@ -10,13 +10,13 @@
   <div class="app">
     <!-- Header -->
     <div class="header">
-      <div class="header-left">
-        <img class="logo" src="../icons/icon.png" alt="SecureView" />
-        <a class="title" href="https://www.websaleem.com/secureview" target="_blank" rel="noopener">
-          <span id="header-title"></span><span id="header-version"></span>
+      <div class="header-left" style="display: flex; align-items: center; gap: 12px;">
+        <a href="https://secureview.websaleem.com" target="_blank" rel="noopener" title="SecureView" style="display: flex; align-items: center; line-height: 0;">
+          <img class="logo" src="../icons/icon.png" alt="SecureView" />
         </a>
+        <span id="user-name" style="display: flex; align-items: center; font-size: 13px; font-weight: 700; color: var(--primary); height: 22px;"></span>
       </div>
-      <div class="header-right">
+      <div class="header-right" style="display: flex; align-items: center; height: 100%;">
         <span class="date" id="today-date"></span>
         <button class="icon-btn" id="history-btn" title="History">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -98,11 +98,11 @@
 
     <!-- Footer -->
     <div class="footer">
-      <a class="privacy-link" href="https://www.websaleem.com/secureview/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+      <a class="privacy-link" href="https://secureview.websaleem.com/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
       <span class="footer-sep">|</span>
-      <a class="privacy-link" href="https://www.websaleem.com/secureview/terms.html" target="_blank" rel="noopener">Terms of Service</a>
+      <a class="privacy-link" href="https://secureview.websaleem.com/terms.html" target="_blank" rel="noopener">Terms of Service</a>
       <span class="footer-sep">|</span>
-      <span class="footer-reset">*Data resets midnight</span>
+      <span class="footer-reset" id="footer-version"></span>
     </div>
   </div>
 
@@ -114,6 +114,70 @@
         <button class="close-btn" id="close-settings">✕</button>
       </div>
       <div class="settings-body">
+        <!-- Profile Section -->
+        <div class="setting-section" style="margin-bottom: 24px;">
+          <div class="setting-section-header" style="margin-bottom: 16px;">
+            <div class="setting-label">Profile Information</div>
+            <div class="setting-desc">Update your account details</div>
+          </div>
+          <div class="profile-form">
+            <div class="setting-form-group">
+              <label>Email Address</label>
+              <input type="text" id="profile-email" class="profile-input" disabled style="background: #f1f5f9; color: var(--text-muted); cursor: not-allowed;" />
+            </div>
+            <div class="setting-form-group" style="margin-top: 12px;">
+              <label>Full Name</label>
+              <input type="text" id="profile-name" class="profile-input" />
+            </div>
+            <div class="setting-form-group" style="margin-top: 12px;">
+              <label>Account Type</label>
+              <div style="display: flex; gap: 16px; margin-top: 6px; font-size: 13px; color: var(--text-main);">
+                <label style="cursor: pointer;"><input type="radio" name="profileAccountType" value="Adult"> Adult</label>
+                <label style="cursor: pointer;"><input type="radio" name="profileAccountType" value="Child"> Child</label>
+              </div>
+            </div>
+            <div class="setting-form-group hidden" id="profile-parent-group" style="margin-top: 12px;">
+              <label>Parent Name</label>
+              <input type="text" id="profile-parent" class="profile-input" />
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
+              <div id="profile-msg" style="font-size: 12px; font-weight: 500;"></div>
+              <button id="profile-save-btn" class="profile-btn">Save Profile</button>
+            </div>
+
+            <!-- Change Password -->
+            <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
+              <div class="setting-label" style="margin-bottom: 8px;">Change Password</div>
+              <div class="setting-form-group">
+                <label>Current Password</label>
+                <input type="password" id="profile-old-pass" class="profile-input" />
+              </div>
+              <div class="setting-form-group" style="margin-top: 8px;">
+                <label>New Password</label>
+                <input type="password" id="profile-new-pass" class="profile-input" />
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
+                <div id="password-msg" style="font-size: 12px; font-weight: 500;"></div>
+                <button id="password-save-btn" class="profile-btn" style="background: var(--text-main);">Update Password</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="setting-divider"></div>
+
+        <div class="setting-row" style="align-items: center;">
+          <div class="setting-info">
+            <div class="setting-label">Email Report Frequency</div>
+            <div class="setting-desc">How often to receive browsing reports</div>
+          </div>
+          <select id="setting-report-freq" class="profile-input" style="width: auto; padding: 4px 8px;">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="none">No email</option>
+          </select>
+        </div>
+        <div class="setting-divider"></div>
+
         <div class="setting-row">
           <div class="setting-info">
             <div class="setting-label">Debug Logging</div>
@@ -158,6 +222,7 @@
         <span>Browsing History</span>
         <button class="close-btn" id="close-history">✕</button>
       </div>
+      <div id="history-graph-container" class="history-graph-container"></div>
       <div id="history-list" class="history-list"></div>
     </div>
   </div>

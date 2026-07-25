@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SecureView Cognito Auth Stack
+
+Resources:
+  SecureViewUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: SecureViewUsers
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: account_type
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: parent_name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+
+  SecureViewUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "secureview-auth-${AWS::AccountId}"
+      UserPoolId: !Ref SecureViewUserPool
+
+  SecureViewUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: SecureViewExtensionClient
+      UserPoolId: !Ref SecureViewUserPool
+      GenerateSecret: false
+      SupportedIdentityProviders:
+        - COGNITO
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      CallbackURLs:
+        - "https://fkjodnfomjpihceinhndmmbkacpnikbe.chromiumapp.org/"
+
+Outputs:
+  UserPoolId:
+    Value: !Ref SecureViewUserPool
+  UserPoolClientId:
+    Value: !Ref SecureViewUserPoolClient
+  CognitoDomain:
+    Value: !Sub "secureview-auth-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
