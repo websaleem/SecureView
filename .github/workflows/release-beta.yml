@@ -25,12 +25,12 @@ jobs:
       - name: Verify tag base matches manifest version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          MANIFEST=$(node -p "require('./manifest.json').version")
+          MANIFEST=$(node -p "require('./chrome/manifest.json').version")
           TAG=${GITHUB_REF#refs/tags/v}
           # Strip the -beta... suffix before comparing.
           BASE=${TAG%%-*}
           if [ "$MANIFEST" != "$BASE" ]; then
-            echo "::error::Tag v$TAG (base $BASE) does not match manifest.json version $MANIFEST"
+            echo "::error::Tag v$TAG (base $BASE) does not match chrome/manifest.json version $MANIFEST"
             exit 1
           fi
 
