@@ -121,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         signedUpPassword = "";  // Clear from memory immediately
         signedUpEmail = "";
-        successMsg.innerHTML = "<p>Verification successful! Logging you in...</p>";
+        successMsg.textContent = "Verification successful! Logging you in...";
         verifyForm.classList.add('hidden');
       } catch (loginErr) {
         signedUpPassword = "";  // Clear even on failure
