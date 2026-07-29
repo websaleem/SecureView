@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/x-icon" href="https://secureview.websaleem.com/images/icon.ico">
-    <title>SecureView | Contact Support</title>
+	<link rel="icon" type="image/x-icon" href="https://secureview.websaleem.com/images/icon.ico">
+    <title>SecureView | Uninstalled Successfully</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         :root {
@@ -16,20 +16,13 @@
             --text-muted: #64748b;
             --success: #10b981;
         }
-
         * { margin: 0; padding: 0; box-sizing: border-box; }
-
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             color: var(--text-main);
             background-color: var(--bg-light);
             line-height: 1.6;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
         }
-
-        /* Navigation */
         nav {
             background: var(--bg-white);
             padding: 1rem 5%;
@@ -41,11 +34,35 @@
             top: 0;
             z-index: 100;
         }
-
-        .logo { font-size: 1.5rem; font-weight: 800; color: var(--primary); display: flex; align-items: center; }
+        .logo { font-size: 1.5rem; font-weight: 800; color: var(--primary); }
         .nav-links a { margin-left: 2rem; text-decoration: none; color: var(--text-muted); font-weight: 500; }
         .nav-links a:hover { color: var(--primary); }
-
+        
+        .uninstall-container {
+            max-width: 800px;
+            margin: 4rem auto;
+            padding: 3rem;
+            background: var(--bg-white);
+            border-radius: 24px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+            text-align: center;
+            border: 1px solid #e2e8f0;
+        }
+        .uninstall-container h1 {
+            font-size: 2.5rem;
+            color: var(--text-main);
+            margin-bottom: 1rem;
+        }
+        .uninstall-container p {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+        .icon-sad {
+            font-size: 4rem;
+            color: #94a3b8;
+            margin-bottom: 1.5rem;
+        }
         .btn {
             padding: 0.75rem 1.5rem;
             border-radius: 8px;
@@ -54,58 +71,10 @@
             display: inline-block;
             transition: all 0.2s;
             cursor: pointer;
-            border: none;
             font-family: inherit;
             font-size: 1rem;
         }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
-
-        /* Page content */
-        .page-content {
-            flex: 1;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 4rem 1rem;
-        }
-
-        .support-card {
-            background: var(--bg-white);
-            padding: 3rem 2.5rem;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
-            max-width: 480px;
-            width: 100%;
-            text-align: center;
-            border: 1px solid #e2e8f0;
-        }
-
-        .support-icon {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
-            color: var(--primary);
-        }
-
-        .support-card h1 {
-            font-size: 1.75rem;
-            margin-bottom: 0.75rem;
-            color: var(--text-main);
-        }
-
-        .support-card p {
-            font-size: 0.95rem;
-            color: var(--text-muted);
-            line-height: 1.6;
-            margin-bottom: 2rem;
-        }
-
-        .response-note {
-            margin-top: 1.5rem;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-
+        
         /* Modal overlay */
         .modal-overlay {
             display: none;
@@ -130,6 +99,7 @@
             max-width: 440px;
             position: relative;
             animation: slideUp 0.22s ease;
+            text-align: left;
         }
 
         @keyframes slideUp {
@@ -221,52 +191,59 @@
             text-align: center;
             display: none;
         }
-
-        /* Footer */
-        footer { background: var(--bg-white); padding: 3rem 5%; text-align: center; border-top: 1px solid #e2e8f0; width: 100%; }
-        .footer-links { margin-bottom: 1rem; }
-        .footer-links a { color: var(--text-muted); margin: 0 1rem; text-decoration: none; font-size: 0.9rem; }
-        .footer-links a:hover { color: var(--primary); }
-        .copyright { color: var(--text-muted); font-size: 0.875rem; }
-
-        @media (max-width: 768px) {
-            .nav-links { display: none; }
-            .modal { padding: 1.5rem; }
-            .footer-links a { display: block; margin: 0.5rem 0; }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+        .btn-outline {
+            background: transparent;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+        .btn-outline:hover {
+            background: var(--primary);
+            color: white;
+            transform: translateY(-1px);
         }
     </style>
 </head>
-
 <body>
     <nav>
         <div class="logo">
-            <img src="https://secureview.websaleem.com/images/icon.png" alt="SecureView Logo" style="height: 32px; width: auto; vertical-align: middle; margin-right: 8px;"> SecureView
-        </div>
+			<img src="https://secureview.websaleem.com/images/icon.png" alt="SecureView Logo" style="height: 32px; width: auto; vertical-align: middle; margin-right: 8px;"> SecureView
+		</div>
         <div class="nav-links">
-            <a href="/secureview#home">Home</a>
-            <a href="/secureview#features">Features</a>
-            <a href="/secureview#technology">How it Works</a>
+			<a href="index.html">Home</a>
+            <a href="index.html#features">Features</a>
+            <a href="index.html#technology">How it Works</a>
             <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
             <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+            <a href="contact-support.html">Contact Support</a>
             <a href="https://chromewebstore.google.com/detail/ojhmodiiehcingcnhlglenenoemmegim" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="margin-left: 2rem; color: white;">Add to Chrome</a>
         </div>
     </nav>
 
-    <main class="page-content">
-        <div class="support-card">
-            <div class="support-icon"><i class="fas fa-headset"></i></div>
-            <h1>Contact Support</h1>
-            <p>Have a question or found a bug? We're here to help. Your feedback helps us keep your browsing history secure and the extension running smoothly.</p>
-            <button class="btn btn-primary" onclick="openModal()">Send Message</button>
-            <p class="response-note">Typical response time: within 24 hours.</p>
+    <div class="uninstall-container">
+        <i class="fas fa-sad-tear icon-sad"></i>
+        <h1>We're sorry to see you go</h1>
+        <p>SecureView has been successfully uninstalled from your browser.</p>
+        <p>If you have a moment, we'd love to know how we could have made your experience better. Please reach out to our support team.</p>
+        <br>
+        <div style="display: flex; gap: 1rem; justify-content: center; align-items: center; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="openModal()" style="width: 240px; display: inline-flex; justify-content: center; align-items: center;">Send Feedback</button>
+            <a href="https://chromewebstore.google.com/detail/ojhmodiiehcingcnhlglenenoemmegim" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="width: 240px; display: inline-flex; justify-content: center; align-items: center;"><i class="fab fa-chrome" style="margin-right: 8px;"></i> Re-install Extension</a>
         </div>
-    </main>
-
+    </div>
     <!-- Modal -->
     <div class="modal-overlay" id="modalOverlay" onclick="handleOverlayClick(event)">
         <div class="modal">
             <div class="modal-header">
-                <h2>Send a Message</h2>
+                <h2>Send Feedback</h2>
                 <button class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
             </div>
 
@@ -282,7 +259,7 @@
                 <div class="form-group">
                     <label for="topic">Topic</label>
                     <select id="topic" name="topic" required>
-                        <option value="" disabled selected>Select a topic…</option>
+                        <option value="Feedback" selected>Feedback</option>
                         <option value="Wrong category classification">Wrong category classification</option>
                         <option value="Extension not working">Extension not working</option>
                         <option value="Browser compatibility issue">Browser compatibility issue</option>
@@ -300,18 +277,6 @@
             </form>
         </div>
     </div>
-
-    <footer>
-        <div class="logo" style="margin-bottom: 1.5rem; justify-content: center;">
-            <img src="https://secureview.websaleem.com/images/icon.png" alt="SecureView Logo" style="height: 32px; width: auto; vertical-align: middle; margin-right: 8px;"> SecureView
-        </div>
-        <div class="footer-links">
-            <a href="contact-support.html">Contact Support</a>
-            <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
-            <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a>
-        </div>
-        <p class="copyright">&copy; 2026 SecureView Extension. All rights reserved.</p>
-    </footer>
 
     <script>
         function openModal() {
@@ -353,7 +318,7 @@
                 });
 
                 if (response.ok) {
-                    statusDiv.textContent = 'Thanks! Your message has been sent successfully.';
+                    statusDiv.textContent = 'Thanks! Your feedback has been sent successfully.';
                     statusDiv.style.color = 'var(--success)';
                     statusDiv.style.display = 'block';
                     form.reset();
