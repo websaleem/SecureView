@@ -181,14 +181,22 @@ async function flushTime(url) {
     data.domains[hostname].categoryIcon = category.icon;
     data.domains[hostname].categoryColor = category.color;
 
-    if (!data.categories[category.name]) {
-      data.categories[category.name] = {
-        name: category.name, icon: category.icon,
-        color: category.color, seconds: 0
-      };
+    // Recompute categories and totalSeconds from domain entries so that
+    // category changes (e.g. "Other" → "Technology" after ML classification)
+    // don't leave stale seconds in the old category.
+    data.categories = {};
+    data.totalSeconds = 0;
+    for (const d of Object.values(data.domains)) {
+      const cat = d.category || "Other";
+      if (!data.categories[cat]) {
+        data.categories[cat] = {
+          name: cat, icon: d.categoryIcon || "🌐",
+          color: d.categoryColor || "#7F8C8D", seconds: 0
+        };
+      }
+      data.categories[cat].seconds += d.seconds;
+      data.totalSeconds += d.seconds;
     }
-    data.categories[category.name].seconds += elapsed;
-    data.totalSeconds = (data.totalSeconds || 0) + elapsed;
 
     await saveStorageData(data);
   });
@@ -350,8 +358,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   await ready();
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
     Logger.info(LOG, "Window lost focus — flushing and pausing");
-    isWindowFocused = false;
     await flushTime(currentUrl);
+    isWindowFocused = false;
     sessionStart = null;
     persistState();
   } else {
@@ -377,8 +385,8 @@ chrome.idle.onStateChanged.addListener(async (state) => {
   await ready();
   Logger.info(LOG, `Idle state: ${state}`);
   if (state === "idle" || state === "locked") {
-    isUserIdle = true;
     await flushTime(currentUrl);
+    isUserIdle = true;
     sessionStart = null;
     persistState();
   } else if (state === "active") {
