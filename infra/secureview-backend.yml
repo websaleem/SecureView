@@ -45,7 +45,7 @@ Resources:
         - openid
         - profile
       CallbackURLs:
-        - "https://ojhmodiiehcingcnhlglenenoemmegim.chromiumapp.org/"
+        - "https://fkjodnfomjpihceinhndmmbkacpnikbe.chromiumapp.org/"
 
   # ───────── WAFv2 WebACL (Global for CloudFront) ─────────
   ***REMOVED***WebACL:

@@ -54,7 +54,7 @@ Resources:
         - openid
         - profile
       CallbackURLs:
-        - "https://ojhmodiiehcingcnhlglenenoemmegim.chromiumapp.org/"
+        - "https://fkjodnfomjpihceinhndmmbkacpnikbe.chromiumapp.org/"
 
 Outputs:
   UserPoolId:
