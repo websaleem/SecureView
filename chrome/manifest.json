@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
   "name": "SecureView",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "Track active browsing time, get AI-powered site categorization, and visualize your daily web activities - all in one dashboard.",
   "permissions": [
     "tabs",
     "storage",
     "alarms",
-    "idle",
-    "identity"
+    "idle"
   ],
   "externally_connectable": {
     "matches": [
