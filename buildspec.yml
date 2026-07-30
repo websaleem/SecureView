@@ -1,53 +1,40 @@
 version: 0.2
 
-env:
-  parameter-store:
-    CWS_CLIENT_ID: /secureview/cws_client_id
-    CWS_CLIENT_SECRET: /secureview/cws_client_secret
-    CWS_REFRESH_TOKEN: /secureview/cws_refresh_token
-    CWS_EXTENSION_ID_PROD: /secureview/cws_extension_id_prod
-    CWS_EXTENSION_ID_BETA: /secureview/cws_extension_id_beta
-
 phases:
   install:
     runtime-versions:
-      nodejs: 20
-    commands:
-      - echo "Installing dependencies..."
-      - npm install -g chrome-webstore-upload-cli@3
+      python: 3.12
   
   pre_build:
     commands:
-      - echo "Verifying channel $CHANNEL"
-      - |
-        if [ "$CHANNEL" != "beta" ] && [ "$CHANNEL" != "production" ]; then
-          echo "Error: CHANNEL environment variable must be 'beta' or 'production'"
-          exit 1
-        fi
-      
-      - echo "Setting up Extension ID for $CHANNEL..."
-      - |
-        if [ "$CHANNEL" = "beta" ]; then
-          export CWS_EXTENSION_ID=$CWS_EXTENSION_ID_BETA
-        else
-          export CWS_EXTENSION_ID=$CWS_EXTENSION_ID_PROD
-        fi
+      - echo "Starting backend deployment..."
+      - echo "Installing dependencies if needed..."
+      - pip install boto3
 
   build:
     commands:
-      - echo "Building Chrome Extension zip artifact for $CHANNEL..."
-      - chmod +x ./scripts/build-zip.sh
-      - ./scripts/build-zip.sh
+      - echo "Deploying CloudFormation stack..."
+      # Deploys the infrastructure, ensuring resources exist.
+      - aws cloudformation deploy --template-file infra/secureview-backend.yml --stack-name SecureViewBackend --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
       
+      - echo "Zipping and deploying Bedrock Categorization Lambda..."
+      - cd backend/lambda/bedrock
+      - zip -r ../bedrock.zip .
+      - cd ../../..
+      - aws lambda update-function-code --function-name svCategorizeURL --zip-file fileb://backend/lambda/bedrock.zip
+
+      - echo "Zipping and deploying Email Report Lambda..."
+      - cd backend/lambda/send_email
+      - zip -r ../email.zip .
+      - cd ../../..
+      - aws lambda update-function-code --function-name svSendEmailReport --zip-file fileb://backend/lambda/email.zip
+
+      - echo "Zipping and deploying Edge Lambda (Categorization Auth)..."
+      - cd backend/lambda
+      - zip -r edge.zip lambda_function.py
+      - cd ../..
+      - aws lambda update-function-code --function-name svSignedCategorizeRequest --zip-file fileb://backend/lambda/edge.zip
+
   post_build:
     commands:
-      - echo "Uploading artifact to Chrome Web Store..."
-      - ZIP=$(ls SecureView*.zip | head -1)
-      - test -f "$ZIP" || { echo "No zip produced"; exit 1; }
-      - echo "Found zip $ZIP"
-      - chrome-webstore-upload-cli upload --source "$ZIP" --extension-id "$CWS_EXTENSION_ID" --client-id "$CWS_CLIENT_ID" --client-secret "$CWS_CLIENT_SECRET" --refresh-token "$CWS_REFRESH_TOKEN" --auto-publish
-
-artifacts:
-  files:
-    - SecureView*.zip
-  discard-paths: yes
+      - echo "Backend deployment complete!"
