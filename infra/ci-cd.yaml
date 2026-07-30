@@ -129,8 +129,19 @@ Resources:
   SecureViewBackendPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      PipelineType: V2
       Name: !Sub "SecureView-Backend-Pipeline-${Channel}"
       RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Triggers:
+        - ProviderType: CodeStarSourceConnection
+          GitConfiguration:
+            SourceActionName: SourceAction
+            Push:
+              - FilePaths:
+                  Includes:
+                    - "backend/**"
+                    - "infra/**"
+                    - "buildspec.yml"
       ArtifactStore:
         Type: S3
         Location: !Ref ArtifactsBucket
