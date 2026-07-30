@@ -180,7 +180,7 @@ function getIconForCategory(categoryName) {
     { keywords: ["tech", "software", "hardware", "developer", "code", "programming", "cloud", "ai", "saas", "cyber"],     icon: "💻", color: "#2ECC71" },
     { keywords: ["education", "learn", "school", "university", "course", "training", "academic", "research", "science"],  icon: "📚", color: "#F39C12" },
     { keywords: ["health", "fitness", "medical", "doctor", "hospital", "clinic", "pharma", "wellness", "diet"],           icon: "🏃", color: "#16A085" },
-    { keywords: ["productiv", "tool", "workspace", "office", "collaborat", "project", "task", "email", "calendar"],       icon: "⚡", color: "#8E44AD" },
+    { keywords: ["productiv", "tool", "workspace", "office", "collaborat", "project", "task", "email", "calendar", "job", "career", "employ", "business", "corporate"],       icon: "⚡", color: "#8E44AD" },
     { keywords: ["game", "gaming", "esport", "casino", "gambling"],                                                       icon: "🎮", color: "#C0392B" },
     { keywords: ["food", "restaurant", "recipe", "cook", "drink", "beverage", "delivery"],                                icon: "🍕", color: "#E74C3C" },
     { keywords: ["real estate", "property", "realt", "housing", "mortgage"],                                              icon: "🏠", color: "#795548" },

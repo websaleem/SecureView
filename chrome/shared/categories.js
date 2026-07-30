@@ -178,6 +178,93 @@ const CATEGORY_RULES = [
       "twitch.tv", "youtube.com/gaming"
     ],
     keywords: ["game", "gaming", "play", "esport", "rpg", "mmo"]
+  },
+  {
+    name: "Jobs & Careers",
+    icon: "💼",
+    color: "#34495E",
+    domains: [
+      "linkedin.com/jobs", "indeed.com", "glassdoor.com", "monster.com",
+      "ziprecruiter.com", "simplyhired.com", "careerbuilder.com", "dice.com",
+      "upwork.com", "fiverr.com", "freelancer.com", "toptal.com",
+      "pageuppeople.com", "lever.co", "greenhouse.io", "workday.com",
+      "seek.com.au", "seek.co.nz"
+    ],
+    keywords: ["job", "career", "employ", "work", "recruit", "hire", "resume", "talent"]
+  },
+  {
+    name: "Business",
+    icon: "📈",
+    color: "#2980B9",
+    domains: [
+      "wsj.com", "bloomberg.com", "forbes.com", "hbr.org",
+      "economist.com", "ft.com", "cnbc.com", "reuters.com",
+      "businessinsider.com", "entrepreneur.com", "inc.com"
+    ],
+    keywords: ["business", "corporate", "enterprise", "industry", "company"]
+  },
+  {
+    name: "Real Estate",
+    icon: "🏠",
+    color: "#D35400",
+    domains: [
+      "zillow.com", "realtor.com", "trulia.com", "redfin.com",
+      "apartments.com", "rightmove.co.uk", "zoopla.co.uk", "domain.com.au",
+      "realestate.com.au"
+    ],
+    keywords: ["realestate", "property", "realty", "housing", "mortgage", "apartment"]
+  },
+  {
+    name: "Arts & Design",
+    icon: "🎨",
+    color: "#AB47BC",
+    domains: [
+      "behance.net", "dribbble.com", "deviantart.com", "artstation.com",
+      "canva.com", "figma.com", "sketch.com", "pixiv.net"
+    ],
+    keywords: ["art", "design", "creative", "photo", "graphic", "illustration", "museum"]
+  },
+  {
+    name: "Automotive",
+    icon: "🚗",
+    color: "#546E7A",
+    domains: [
+      "autotrader.com", "cars.com", "kbb.com", "edmunds.com",
+      "carmax.com", "cargurus.com", "tesla.com", "ford.com",
+      "toyota.com", "honda.com"
+    ],
+    keywords: ["auto", "car", "vehicle", "truck", "motorcycle", "transport"]
+  },
+  {
+    name: "Science & Nature",
+    icon: "🌿",
+    color: "#43A047",
+    domains: [
+      "nasa.gov", "nationalgeographic.com", "nature.com",
+      "scientificamerican.com", "space.com", "discovery.com",
+      "petfinder.com"
+    ],
+    keywords: ["science", "nature", "environment", "climate", "animal", "wildlife", "outdoor", "physics", "biology"]
+  },
+  {
+    name: "Religion & Spirituality",
+    icon: "🙏",
+    color: "#8D6E63",
+    domains: [
+      "biblegateway.com", "jw.org", "churchofjesuschrist.org",
+      "islamicity.org", "astrology.com"
+    ],
+    keywords: ["religion", "spiritual", "church", "faith", "prayer", "bible", "islam", "hindu", "buddhist", "astrology"]
+  },
+  {
+    name: "Telecommunications",
+    icon: "📡",
+    color: "#2C3E50",
+    domains: [
+      "optus.com.au", "telstra.com.au", "vodafone.com.au", "tpg.com.au",
+      "att.com", "verizon.com", "t-mobile.com", "sprint.com", "comcast.com", "xfinity.com"
+    ],
+    keywords: ["telecom", "mobile", "broadband", "internet", "wireless", "cellular", "optus", "telstra", "vodafone"]
   }
 ];
 

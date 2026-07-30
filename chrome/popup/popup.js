@@ -620,12 +620,14 @@ async function init() {
   await Logger.init();
   
   const tokens = await chrome.storage.local.get(['accessToken', 'idToken', 'customProfileName']);
-  if (!tokens.accessToken) {
-    window.location.href = "login.html";
-    return;
-  }
+  // if (!tokens.accessToken) {
+  //   window.location.href = "login.html";
+  //   return;
+  // }
 
   const el = document.getElementById('user-name');
+  if (el) el.textContent = "Hi, there";
+
   if (tokens.customProfileName) {
     if (el) el.textContent = `Hi, ${tokens.customProfileName.split(' ')[0]}`;
   } else if (tokens.idToken) {
