@@ -18,13 +18,17 @@ CATEGORIES = [
     "Finance & Banking", "Education", "Entertainment", 
     "Government", "Health & Fitness", "Travel", "Sports", 
     "Food & Dining", "Productivity", "Gaming", 
-    "Adult Content", "Malware / Phishing", "Personal", "Other"
+    "Adult Content", "Malware / Phishing", "Personal", 
+    "Jobs & Careers", "Business", "Real Estate", 
+    "Arts & Design", "Automotive", "Science & Nature", "Religion & Spirituality", 
+    "Telecommunications", "Other"
 ]
 
 SYSTEM_PROMPT = """You are a URL categorisation engine.
 Given a website hostname and page title (optional), return the single most accurate
-category from the provided list. Reply with ONLY the category name —
-no explanation, no punctuation, nothing else."""
+category. Please choose from the provided list if possible. If none of the provided
+categories fit well, you may create a concise new category.
+Reply with ONLY the category name — no explanation, no punctuation, nothing else."""
 
 
 def build_user_message(hostname: str, title: str) -> str:
@@ -127,6 +131,16 @@ def sanitise_category(raw: str) -> str:
     for cat in CATEGORIES:
         if cat.lower() in cleaned.lower():
             return cat
+            
+    # If Bedrock generated a new category, accept it if it looks like a short category name
+    if len(cleaned) > 0 and len(cleaned) <= 30:
+        log.info(json.dumps({
+            "event":   "dynamic_category_accepted",
+            "raw":     raw,
+            "result":  cleaned.title(),
+        }))
+        return cleaned.title()
+
     log.warning(json.dumps({
         "event":   "category_fallback",
         "raw":     raw,
