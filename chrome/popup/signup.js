@@ -1,8 +1,9 @@
 import { CognitoIdentityProviderClient, SignUpCommand, ConfirmSignUpCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { loginUser } from "./login.js";
 
-const CLIENT_ID = "1bpn546e7vk1bm95ncbr0u5ma8";
-const REGION = "ap-southeast-2";
+/* global SV_CONFIG */
+const CLIENT_ID = SV_CONFIG.COGNITO_CLIENT_ID;
+const REGION = SV_CONFIG.COGNITO_REGION;
 
 const client = new CognitoIdentityProviderClient({ region: REGION });
 

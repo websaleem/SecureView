@@ -39,6 +39,18 @@ def lambda_handler(event, context):
         
     cf_request["uri"] = uri
 
+    # ── Handle OPTIONS Preflight ───────────────────────────────────────────
+    if method == "OPTIONS":
+        return {
+            "status": "204",
+            "statusDescription": "No Content",
+            "headers": {
+                "access-control-allow-origin": [{"key": "Access-Control-Allow-Origin", "value": "*"}],
+                "access-control-allow-methods": [{"key": "Access-Control-Allow-Methods", "value": "OPTIONS, POST"}],
+                "access-control-allow-headers": [{"key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization"}],
+            }
+        }
+
     # ── Body decoding ──────────────────────────────────────────────────────
     body_obj = cf_request.get("body") or {}
     raw      = body_obj.get("data", "")

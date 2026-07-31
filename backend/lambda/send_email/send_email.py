@@ -6,6 +6,8 @@ import re
 ses_client = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'ap-southeast-2'))
 cognito_client = boto3.client('cognito-idp', region_name=os.environ.get('AWS_REGION', 'ap-southeast-2'))
 
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'noreply@secureview.websaleem.com')
+
 # ─── Security utilities ───────────────────────────────────────────────────────
 
 def escape_html(s):
@@ -45,7 +47,7 @@ def lambda_handler(event, context):
             body = json.loads(event.get('body', '{}'))
         
         if not access_token:
-            return {'statusCode': 401, 'body': json.dumps({'message': 'Missing authentication'})}
+            return {'statusCode': 401, 'headers': _cors_headers(), 'body': json.dumps({'message': 'Missing authentication'})}
             
         # Verify user via Cognito
         user_response = cognito_client.get_user(AccessToken=access_token)
@@ -58,7 +60,7 @@ def lambda_handler(event, context):
         freq = raw_freq.capitalize() if isinstance(raw_freq, str) and raw_freq.lower() in ('daily', 'weekly') else 'Daily'
         
         if not email:
-            return {'statusCode': 400, 'body': json.dumps({'message': 'User has no email'})}
+            return {'statusCode': 400, 'headers': _cors_headers(), 'body': json.dumps({'message': 'User has no email'})}
 
         # Escape user-controlled values before HTML interpolation
         safe_name = escape_html(name)
@@ -163,7 +165,7 @@ def lambda_handler(event, context):
             return {'statusCode': 400, 'body': json.dumps({'message': 'Invalid action'})}
 
         ses_client.send_email(
-            Source=email,
+            Source=SENDER_EMAIL,
             Destination={'ToAddresses': [email]},
             Message={
                 'Subject': {'Data': subject},
@@ -173,16 +175,28 @@ def lambda_handler(event, context):
 
         return {
             'statusCode': 200,
+            'headers': _cors_headers(),
             'body': json.dumps({'message': 'Email sent successfully'})
         }
     except cognito_client.exceptions.NotAuthorizedException:
         return {
             'statusCode': 401,
+            'headers': _cors_headers(),
             'body': json.dumps({'message': 'Invalid or expired token'})
         }
     except Exception as e:
         print(f"Email report error: {e}")
         return {
             'statusCode': 500,
+            'headers': _cors_headers(),
             'body': json.dumps({'message': 'An internal error occurred. Please try again later.'})
         }
+
+
+def _cors_headers():
+    return {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+        'Access-Control-Allow-Methods': 'POST,OPTIONS'
+    }

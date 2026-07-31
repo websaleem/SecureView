@@ -12,5 +12,9 @@ module.exports = {
   },
   resolve: {
     extensions: ['.js']
+  },
+  externals: {
+    // SV_CONFIG is loaded via <script src="../shared/config.js"> before the bundle
+    SV_CONFIG: 'SV_CONFIG'
   }
 };

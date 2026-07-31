@@ -32,8 +32,9 @@ Reply with ONLY the category name — no explanation, no punctuation, nothing el
 
 
 def build_user_message(hostname: str, title: str) -> str:
-    hostname = hostname.strip()[:200]
-    title  = title.strip()[:300].encode("utf-8", errors="ignore").decode("utf-8")
+    # Sanitize inputs: strip control characters and newlines to prevent prompt injection
+    hostname = _sanitize_input(hostname.strip()[:200])
+    title  = _sanitize_input(title.strip()[:300].encode("utf-8", errors="ignore").decode("utf-8"))
     cats   = "\n".join(f"- {c}" for c in CATEGORIES)
     return f"""hostname: {hostname}
 Title:  {title}
@@ -42,6 +43,15 @@ Categories:
 {cats}
 
 Category:"""
+
+
+import re
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f\x7f-\x9f]')
+
+def _sanitize_input(s: str) -> str:
+    """Strip control characters and collapse whitespace to prevent prompt injection."""
+    s = _CONTROL_CHARS_RE.sub(' ', s)
+    return ' '.join(s.split())  # collapse multiple spaces / stripped newlines
 
 
 def invoke_nova(hostname: str, title: str) -> str:
@@ -127,9 +137,6 @@ def sanitise_category(raw: str) -> str:
     cleaned = raw.strip().rstrip(".")
     for cat in CATEGORIES:
         if cat.lower() == cleaned.lower():
-            return cat
-    for cat in CATEGORIES:
-        if cat.lower() in cleaned.lower():
             return cat
             
     # If Bedrock generated a new category, accept it if it looks like a short category name

@@ -50,7 +50,6 @@ done
 # Drop macOS metadata so a developer build doesn't accidentally ship it.
 find "$BUILD_DIR" -name ".DS_Store" -delete
 
-# Patch manifest.name for beta channel.
 if [[ "$CHANNEL" == "beta" ]]; then
   node -e '
     const fs = require("fs");
@@ -59,6 +58,28 @@ if [[ "$CHANNEL" == "beta" ]]; then
     m.name = process.argv[1];
     fs.writeFileSync(path, JSON.stringify(m, null, 2) + "\n");
   ' "$BETA_NAME"
+elif [[ "$CHANNEL" == "production" ]]; then
+  # Overwrite Dev configuration in config.js with Production variables for the prod build
+  if [[ -n "${PROD_COGNITO_CLIENT_ID:-}" && -n "${PROD_COGNITO_DOMAIN:-}" && -n "${PROD_CLOUDFRONT_URL:-}" ]]; then
+    node -e '
+      const fs = require("fs");
+      const path = "build/production/shared/config.js";
+      let c = fs.readFileSync(path, "utf8");
+      c = c.replace(/COGNITO_CLIENT_ID:\s*"[^"]+"/, `COGNITO_CLIENT_ID: "${process.env.PROD_COGNITO_CLIENT_ID}"`);
+      c = c.replace(/COGNITO_DOMAIN:\s*"[^"]+"/, `COGNITO_DOMAIN: "${process.env.PROD_COGNITO_DOMAIN}"`);
+      fs.writeFileSync(path, c);
+    '
+    node -e '
+      const fs = require("fs");
+      const path = "build/production/shared/categorizer.js";
+      let c = fs.readFileSync(path, "utf8");
+      // Replaces the obfuscated CloudFront URL builder in categorizer.js for production
+      c = c.replace(/const _CF_HOST\s*=\s*\[[^\]]+\]\.join\(""\);/, `const _CF_HOST = "${process.env.PROD_CLOUDFRONT_URL}";`);
+      fs.writeFileSync(path, c);
+    '
+  else
+    echo "Warning: PROD_COGNITO_CLIENT_ID, PROD_COGNITO_DOMAIN, or PROD_CLOUDFRONT_URL is missing. Using dev config for production zip!"
+  fi
 fi
 
 (cd "$BUILD_DIR" && zip -qr "../../$OUTPUT" .)

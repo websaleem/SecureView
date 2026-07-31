@@ -94,7 +94,7 @@ const CATEGORY_RULES = [
       "digitaltrends.com", "tomsguide.com", "tomshardware.com",
       "npmjs.com", "pypi.org", "crates.io", "rubygems.org",
       "codepen.io", "jsfiddle.net", "replit.com", "codesandbox.io",
-      "docs.google.com", "notion.so", "atlassian.com", "jira.com",
+      "docs.google.com", "atlassian.com", "jira.com",
       "confluence.com", "trello.com"
     ],
     keywords: ["tech", "code", "dev", "software", "api", "docs", "developer"]
@@ -175,7 +175,7 @@ const CATEGORY_RULES = [
       "miniclip.com", "poki.com", "crazygames.com", "y8.com",
       "ign.com", "gamespot.com", "kotaku.com", "polygon.com",
       "pcgamer.com", "rockpapershotgun.com", "eurogamer.net",
-      "twitch.tv", "youtube.com/gaming"
+      "youtube.com/gaming"
     ],
     keywords: ["game", "gaming", "play", "esport", "rpg", "mmo"]
   },
@@ -197,9 +197,7 @@ const CATEGORY_RULES = [
     icon: "📈",
     color: "#2980B9",
     domains: [
-      "wsj.com", "bloomberg.com", "forbes.com", "hbr.org",
-      "economist.com", "ft.com", "cnbc.com", "reuters.com",
-      "businessinsider.com", "entrepreneur.com", "inc.com"
+      "hbr.org", "entrepreneur.com", "inc.com"
     ],
     keywords: ["business", "corporate", "enterprise", "industry", "company"]
   },
