@@ -25,6 +25,20 @@ function safeColor(c) {
   return /^#[0-9a-fA-F]{6}$/.test(String(c)) ? c : "#7F8C8D";
 }
 
+// Map raw Cognito SDK error messages to user-friendly text so internal
+// details (e.g. "User does not exist") are not exposed in the UI.
+function _friendlyCognitoError(msg) {
+  if (!msg) return "Something went wrong. Please try again.";
+  const m = msg.toLowerCase();
+  if (m.includes("not authorized") || m.includes("notauthorized"))     return "Session expired — please log in again.";
+  if (m.includes("user does not exist"))                                return "Account not found.";
+  if (m.includes("incorrect") && m.includes("password"))               return "Incorrect password.";
+  if (m.includes("password") && m.includes("policy"))                  return "Password does not meet requirements (min 8 chars, upper, lower, number).";
+  if (m.includes("limit exceeded") || m.includes("limitexceeded"))     return "Too many attempts — please wait a moment.";
+  if (m.includes("expired"))                                            return "Session expired — please log in again.";
+  return msg; // pass through if no mapping
+}
+
 function formatDuration(seconds) {
   if (seconds < 60) return `${seconds}s`;
   const h = Math.floor(seconds / 3600);
@@ -424,7 +438,7 @@ async function cognitoRequest(target, payload) {
   const doRequest = async (token) => {
     // If the payload has an AccessToken field, update it with the provided token
     const updatedPayload = payload.AccessToken ? { ...payload, AccessToken: token } : payload;
-    const res = await fetch(`https://cognito-idp.ap-southeast-2.amazonaws.com/`, {
+    const res = await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-amz-json-1.1",
@@ -445,7 +459,7 @@ async function cognitoRequest(target, payload) {
       const stored = await chrome.storage.local.get(['refreshToken']);
       if (stored.refreshToken) {
         try {
-          const refreshRes = await fetch(`https://cognito-idp.ap-southeast-2.amazonaws.com/`, {
+          const refreshRes = await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
             method: "POST",
             headers: {
               "Content-Type": "application/x-amz-json-1.1",
@@ -453,7 +467,7 @@ async function cognitoRequest(target, payload) {
             },
             body: JSON.stringify({
               AuthFlow: "REFRESH_TOKEN_AUTH",
-              ClientId: "1bpn546e7vk1bm95ncbr0u5ma8",
+              ClientId: SV_CONFIG.COGNITO_CLIENT_ID,
               AuthParameters: { REFRESH_TOKEN: stored.refreshToken }
             })
           });
@@ -620,6 +634,7 @@ async function init() {
   await Logger.init();
   
   const tokens = await chrome.storage.local.get(['accessToken', 'idToken', 'customProfileName']);
+  // TODO: Re-enable auth redirect for production
   // if (!tokens.accessToken) {
   //   window.location.href = "login.html";
   //   return;
@@ -812,7 +827,7 @@ async function init() {
       msg.textContent = "Profile saved!";
       msg.style.color = "#10b981"; // success green
     } catch (e) {
-      msg.textContent = e.message;
+      msg.textContent = _friendlyCognitoError(e.message);
       msg.style.color = "#ef4444";
     } finally {
       btn.disabled = false;
@@ -847,7 +862,7 @@ async function init() {
       document.getElementById("profile-old-pass").value = "";
       document.getElementById("profile-new-pass").value = "";
     } catch (e) {
-      msg.textContent = e.message;
+      msg.textContent = _friendlyCognitoError(e.message);
       msg.style.color = "#ef4444";
     } finally {
       btn.disabled = false;

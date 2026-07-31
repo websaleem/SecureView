@@ -10,8 +10,7 @@ from botocore.credentials import Credentials
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-API_REGION   = "ap-southeast-4"
-API_HOST     = "your-api-id.execute-api.ap-southeast-4.amazonaws.com"
+# API settings are dynamically extracted from the request origin
 
 # Error response structure
 def error_response(status, message):
@@ -29,6 +28,11 @@ def lambda_handler(event, context):
     cf_request  = event["Records"][0]["cf"]["request"]
     method      = cf_request["method"]
     querystring = cf_request.get("querystring", "")
+    
+    # Extract API Gateway host and region from CloudFront origin
+    origin_domain = cf_request.get("origin", {}).get("custom", {}).get("domainName", "")
+    API_HOST = origin_domain if origin_domain else "localhost"
+    API_REGION = origin_domain.split(".")[2] if ".execute-api." in origin_domain else "ap-southeast-2"
 
     # ── Map environment to URI prefix ──────────────────────────────────────
     uri = cf_request['uri']
@@ -38,6 +42,18 @@ def lambda_handler(event, context):
         uri = "/prod/categorize"
         
     cf_request["uri"] = uri
+
+    # ── Handle OPTIONS Preflight ───────────────────────────────────────────
+    if method == "OPTIONS":
+        return {
+            "status": "204",
+            "statusDescription": "No Content",
+            "headers": {
+                "access-control-allow-origin": [{"key": "Access-Control-Allow-Origin", "value": "*"}],
+                "access-control-allow-methods": [{"key": "Access-Control-Allow-Methods", "value": "OPTIONS, POST"}],
+                "access-control-allow-headers": [{"key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization"}],
+            }
+        }
 
     # ── Body decoding ──────────────────────────────────────────────────────
     body_obj = cf_request.get("body") or {}

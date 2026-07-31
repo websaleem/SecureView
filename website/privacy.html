@@ -34,7 +34,7 @@
     <h1 style="margin:0;">SecureView – Privacy Policy</h1>
   </div>
   <p class="meta">
-    Last updated: April 11, 2026 &nbsp;·&nbsp; Version 1.0.1<br />
+    Last updated: July 31, 2026 &nbsp;·&nbsp; Version 1.0.1<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -54,8 +54,8 @@
     <li><strong>Page titles</strong> — the title of the active tab, used solely to improve AI categorization accuracy.</li>
     <li><strong>Website category</strong> — a classification label (e.g. Technology, Social Media) assigned to each domain.</li>
     <li><strong>User activity signals</strong> — mouse movement, keyboard, and scroll events are detected by a content script to distinguish active browsing from idle time. Raw event content is never recorded; only the presence of activity within a 10-second window is noted.</li>
-    <li><strong>Browser-internal pages</strong> — Chrome internal pages (e.g. <code>chrome://extensions/</code>) are tracked and stored under the hostname (e.g. <code>extensions</code>) with the category label "System". No content from these pages is read or transmitted.</li>
   </ul>
+  <p>Browser-internal pages (e.g. <code>chrome://</code>, <code>chrome-extension://</code>, <code>about:</code>) are <strong>not</strong> tracked.</p>
   <p>SecureView does <strong>not</strong> collect passwords, form input, page content, search queries, cookies, or any personally identifiable information beyond what is listed above.</p>
 
   <h2>2. Where Data Is Stored</h2>
@@ -74,7 +74,7 @@
   </p>
   <p>When a classification request is made, the following fields are sent:</p>
   <ul>
-    <li>The full page URL</li>
+    <li>The page URL (query strings and fragments are stripped before transmission)</li>
     <li>The hostname</li>
     <li>The page title (if available)</li>
   </ul>
@@ -93,6 +93,15 @@
     <strong>No browsing data is sent if:</strong> the domain is already matched by the
     built-in rule set and "Always use AI Categorization" is off, or the domain is on
     your exclusion list.
+  </p>
+
+  <h2>3a. Email Reports</h2>
+  <p>
+    If you enable email reports, SecureView periodically sends a summary of your browsing
+    activity (category names and time breakdowns — no individual URLs) to an AWS Lambda
+    function, which generates and sends the report to your registered email address via
+    Amazon SES. Your Cognito access token is sent in the request for authentication.
+    No detailed browsing history or page titles are included in the report payload.
   </p>
 
   <h2>4. Permissions Used</h2>
@@ -115,9 +124,10 @@
 
   <h2>6. Data Retention</h2>
   <p>
-    Daily browsing records are stored indefinitely until you clear them manually or uninstall
-    the extension. The extension does not automatically delete old records. You can view and
-    clear past records via the History panel in the popup.
+    Daily browsing records are automatically deleted after <strong>7 days</strong>. The
+    extension retains the current day plus the 6 prior days of data; older records are
+    pruned automatically. You can also clear today's data at any time via the popup.
+    Uninstalling the extension removes all locally stored data.
   </p>
 
   <h2>7. Third-Party Services</h2>

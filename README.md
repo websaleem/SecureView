@@ -21,33 +21,30 @@ SecureView ships through two Chrome Web Store entries:
 
 | Channel | Store entry name | Trigger | Workflow |
 |---|---|---|---|
-| Production | `SecureView` | tag `v1.2.3` | `.github/workflows/release.yml` |
-| Beta | `SecureView Beta` | tag `v1.2.3-beta` | `.github/workflows/release-beta.yml` |
+| Production | `SecureView` | push to `main` (chrome/** changes) | `.github/workflows/release.yml` |
+| Beta | `SecureView Beta` | push to `dev` (chrome/** changes) | `.github/workflows/release.yml` |
 
-Both workflows can also be run on demand via **Actions → Run workflow**.
+The workflow can also be run on demand via **Actions → Run workflow**.
 
 ### Local build
 
 `scripts/build-zip.sh` reads the version from `manifest.json` and produces a Chrome-Web-Store-ready zip. The beta channel rewrites `manifest.name` to `SecureView Beta` in a staged copy — your source tree is never mutated.
 
 ```bash
-./scripts/build-zip.sh                     ***REMOVED***-<version>.zip
-CHANNEL=beta ./scripts/build-zip.sh        ***REMOVED***-Beta-<version>.zip
+./scripts/build-zip.sh                     # → SecureView-<version>.zip
+CHANNEL=beta ./scripts/build-zip.sh        # → SecureView-Beta-<version>.zip
 ```
 
 ### Shipping a release
 
 ```bash
 # 1. Bump version in manifest.json and commit.
-# 2. Tag and push:
-git tag v1.0.5         # production
-# or
-git tag v1.0.5-beta    # beta
-git push origin v1.0.5
+# 2. Push to the appropriate branch:
+git push origin dev      # beta
+git push origin main     # production
 
 # 3. Watch the workflow in GitHub Actions; it will:
-#    - re-validate the tag matches manifest.version
-#    - build the zip with the right channel
+#    - build the zip with the right channel (beta for dev, production for main)
 #    - upload + auto-publish via chrome-webstore-upload-cli
 #    - archive the zip as a workflow artifact for 90 days
 ```

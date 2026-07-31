@@ -13,28 +13,33 @@ phases:
 
   build:
     commands:
+      # Determine environment from branch name
+      - BRANCH_NAME=$(echo $CODEBUILD_WEBHOOK_HEAD_REF | sed 's/refs\/heads\///')
+      - if [ "$BRANCH_NAME" = "main" ]; then ENV="prod"; else ENV="dev"; fi
+      - echo "Deploying to $ENV environment..."
+
       - echo "Deploying CloudFormation stack..."
       # Deploys the infrastructure, ensuring resources exist.
-      - aws cloudformation deploy --template-file infra/secureview-backend.yml --stack-name SecureViewBackend --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+      - aws cloudformation deploy --template-file infra/secureview-backend.yml --stack-name SecureViewBackend-$ENV --parameter-overrides Environment=$ENV --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
       
       - echo "Zipping and deploying Bedrock Categorization Lambda..."
       - cd backend/lambda/bedrock
       - zip -r ../bedrock.zip .
       - cd ../../..
-      - aws lambda update-function-code --function-name svCategorizeURL --zip-file fileb://backend/lambda/bedrock.zip
+      - aws lambda update-function-code --function-name svCategorizeURL-$ENV --zip-file fileb://backend/lambda/bedrock.zip
 
       - echo "Zipping and deploying Email Report Lambda..."
       - cd backend/lambda/send_email
       - zip -r ../email.zip .
       - cd ../../..
-      - aws lambda update-function-code --function-name svSendEmailReport --zip-file fileb://backend/lambda/email.zip
+      - aws lambda update-function-code --function-name svSendEmailReport-$ENV --zip-file fileb://backend/lambda/email.zip
 
       - echo "Zipping and deploying Edge Lambda (Categorization Auth)..."
       - cd backend/lambda
       - zip -r edge.zip lambda_function.py
       - cd ../..
-      - aws lambda update-function-code --function-name svSignedCategorizeRequest --zip-file fileb://backend/lambda/edge.zip
+      - aws lambda update-function-code --function-name svSignedCategorizeRequest-$ENV --zip-file fileb://backend/lambda/edge.zip
 
   post_build:
     commands:
-      - echo "Backend deployment complete!"
+      - echo "Backend deployment complete for $ENV!"

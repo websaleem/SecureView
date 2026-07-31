@@ -20,10 +20,10 @@ let isWindowFocused = true;
 let isUserIdle = false;
 let stateLoaded = false;
 
-const SESSION_KEY          = "sv_session";
+const SESSION_KEY = "sv_session";
 const IDLE_THRESHOLD_SECONDS = 60;
 const EXCLUDED_DOMAINS_KEY = "excluded_domains";
-const RETENTION_DAYS       = 7;
+const RETENTION_DAYS = 7;
 
 // ─── Excluded domains (in-memory, synced from storage) ───────────────────────
 let _excludedDomains = new Set();
@@ -58,7 +58,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 let _writeChain = Promise.resolve();
 function withStorageLock(fn) {
   const next = _writeChain.then(fn, fn);
-  _writeChain = next.catch(() => {});
+  _writeChain = next.catch(() => { });
   return next;
 }
 
@@ -75,12 +75,12 @@ function isExcluded(url) {
 // categorization.
 function shouldTrack(url) {
   if (!url) return false;
-  if (url.startsWith("chrome://"))           return false;
+  if (url.startsWith("chrome://")) return false;
   if (url.startsWith("chrome-extension://")) return false;
-  if (url.startsWith("file://"))             return false;
-  if (url.startsWith("about:"))              return false;
-  if (url.startsWith("edge://"))             return false;
-  if (url.startsWith("view-source:"))        return false;
+  if (url.startsWith("file://")) return false;
+  if (url.startsWith("about:")) return false;
+  if (url.startsWith("edge://")) return false;
+  if (url.startsWith("view-source:")) return false;
   return true;
 }
 
@@ -236,13 +236,13 @@ function triggerEagerCategorization(url, title) {
           await saveStorageData(data);
         } else if (!data.domains[hostname].category || data.domains[hostname].category === "Other") {
           Logger.info(LOG, `Eager category upgraded: ${hostname} → ${category.name}`);
-          data.domains[hostname].category      = category.name;
-          data.domains[hostname].categoryIcon  = category.icon;
+          data.domains[hostname].category = category.name;
+          data.domains[hostname].categoryIcon = category.icon;
           data.domains[hostname].categoryColor = category.color;
           await saveStorageData(data);
         }
       });
-    } catch (e) {}
+    } catch (e) { }
   })();
 }
 
@@ -315,7 +315,7 @@ async function ensureTracking() {
       sessionStart = Date.now();
       persistState();
     }
-  } catch (e) {}
+  } catch (e) { }
 }
 
 // ─── Event Listeners ──────────────────────────────────────────────────────────
@@ -333,7 +333,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
     if (tab?.url) await switchTo(tab.url, tab.id, tab.title);
-  } catch (e) {}
+  } catch (e) { }
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -368,7 +368,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, windowId });
       if (tab?.url) await switchTo(tab.url, tab.id, tab.title);
-    } catch (e) {}
+    } catch (e) { }
   }
 });
 
@@ -513,8 +513,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 // Listen for messages from the external website (e.g. auth tokens)
 const ALLOWED_AUTH_ORIGINS = [
-  "https://www.websaleem.com",
-  "https://websaleem.com"
+  "https://secureview.websaleem.com"
 ];
 
 chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
@@ -616,9 +615,9 @@ async function getValidAccessToken() {
 async function sendEmailReport() {
   const accessToken = await getValidAccessToken();
   if (!accessToken) return;
-  
+
   const config = getCFConfig();
-  
+
   const { emailReportFreq } = await chrome.storage.local.get(["emailReportFreq"]);
   const freq = emailReportFreq || "daily";
   if (freq === "none") return;
@@ -648,7 +647,7 @@ async function sendEmailReport() {
     } else {
       Logger.warn("REPORT", "Failed to send email report", res.status);
     }
-  } catch(e) {
+  } catch (e) {
     Logger.warn("REPORT", "Error sending email report", e?.message);
   }
 }
@@ -677,7 +676,7 @@ async function sendWelcomeEmail() {
     } else {
       Logger.warn("REPORT", "Failed to send welcome email", res.status);
     }
-  } catch(e) {
+  } catch (e) {
     Logger.warn("REPORT", "Error sending welcome email", e?.message);
   }
 }
