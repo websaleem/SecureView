@@ -36,6 +36,8 @@ jobs:
             BUCKET="dev.secureview.websaleem.com"
             DIST_ID="$DEV_DIST_ID"
             echo "=== Deploying to DEVELOPMENT ($BUCKET) ==="
+            # Inject dev URLs for the dev website
+            find website -type f -name "*.html" -exec sed -i 's|https://secureview.websaleem.com|https://dev.secureview.websaleem.com|g' {} +
           fi
           
           # Sync and capture output to stderr (so we still see it in logs) and a variable

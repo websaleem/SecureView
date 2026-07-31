@@ -58,6 +58,25 @@ if [[ "$CHANNEL" == "beta" ]]; then
     m.name = process.argv[1];
     fs.writeFileSync(path, JSON.stringify(m, null, 2) + "\n");
   ' "$BETA_NAME"
+  
+  # Inject dev URLs for the beta/dev extension
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    function replaceInDir(dir) {
+      fs.readdirSync(dir).forEach(file => {
+        const fullPath = path.join(dir, file);
+        if (fs.statSync(fullPath).isDirectory()) {
+          replaceInDir(fullPath);
+        } else if (fullPath.endsWith(".html") || fullPath.endsWith(".js")) {
+          let content = fs.readFileSync(fullPath, "utf8");
+          content = content.replace(/https:\/\/secureview\.websaleem\.com/g, "https://dev.secureview.websaleem.com");
+          fs.writeFileSync(fullPath, content);
+        }
+      });
+    }
+    replaceInDir("build/beta");
+  '
 elif [[ "$CHANNEL" == "production" ]]; then
   # Overwrite Dev configuration in config.js with Production variables for the prod build
   if [[ -n "${PROD_COGNITO_CLIENT_ID:-}" && -n "${PROD_COGNITO_DOMAIN:-}" && -n "${PROD_CLOUDFRONT_URL:-}" ]]; then

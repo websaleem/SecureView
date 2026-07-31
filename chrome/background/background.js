@@ -497,7 +497,7 @@ async function init() {
   Logger.info(LOG, "Extension initialized");
 }
 
-chrome.runtime.setUninstallURL("https://dev.secureview.websaleem.com/uninstall.html");
+chrome.runtime.setUninstallURL("https://secureview.websaleem.com/uninstall.html");
 
 const COGNITO_DOMAIN = SV_CONFIG.COGNITO_DOMAIN;
 const CLIENT_ID = SV_CONFIG.COGNITO_CLIENT_ID;
@@ -506,14 +506,14 @@ const REDIRECT_URI = `https://${chrome.runtime.id}.chromiumapp.org/`;
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === chrome.runtime.OnInstalledReason.INSTALL || details.reason === "install") {
     // Open the external success page
-    chrome.tabs.create({ url: "https://dev.secureview.websaleem.com/installsuccess.html" });
+    chrome.tabs.create({ url: "https://secureview.websaleem.com/installsuccess.html" });
   }
   init();
 });
 
 // Listen for messages from the external website (e.g. auth tokens)
 const ALLOWED_AUTH_ORIGINS = [
-  "https://dev.secureview.websaleem.com"
+  "https://secureview.websaleem.com"
 ];
 
 chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
