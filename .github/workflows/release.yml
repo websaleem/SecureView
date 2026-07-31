@@ -8,6 +8,11 @@ on:
     paths:
       - 'chrome/**'
   workflow_dispatch:
+    inputs:
+      publish_extension:
+        description: 'Publish to Chrome Web Store'
+        type: boolean
+        default: false
 
 jobs:
   publish:
@@ -30,6 +35,7 @@ jobs:
         run: ./scripts/build-zip.sh
 
       - name: Upload + publish to Chrome Web Store
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_extension == true) || contains(github.event.head_commit.message, '[deploy]') }}
         env:
           CWS_CLIENT_ID:     ${{ secrets.CWS_CLIENT_ID }}
           CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
