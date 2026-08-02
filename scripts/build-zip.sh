@@ -90,9 +90,9 @@ elif [[ "$CHANNEL" == "production" ]]; then
     '
     node -e '
       const fs = require("fs");
-      const path = "build/production/shared/categorizer.js";
+      const path = "build/production/shared/config.js";
       let c = fs.readFileSync(path, "utf8");
-      // Replaces the obfuscated CloudFront URL builder in categorizer.js for production
+      // Replaces the obfuscated CloudFront URL builder in config.js for production
       c = c.replace(/const _CF_HOST\s*=\s*\[[^\]]+\]\.join\(""\);/, `const _CF_HOST = "${process.env.PROD_CLOUDFRONT_URL}";`);
       fs.writeFileSync(path, c);
     '

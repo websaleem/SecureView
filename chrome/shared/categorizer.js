@@ -40,16 +40,7 @@ const RETRY_BASE_MS    = 500;  // exponential backoff: 500 ms, 1000 ms
 // Both build channels currently share one token — re-introduce a per-env split
 // here (and update the validator) if you ever rotate one without the other.
 
-// Obfuscated domain construction to evade automated GitHub scraping bots
-const _CF_HOST = ["https://", "d1pjkjoqck0lva", ".cloudfront", ".net"].join("");
-const CF_CONFIG = {
-  url: `${_CF_HOST}/categorize`,
-  reportUrl: `${_CF_HOST}/report`
-};
 
-function getCFConfig() {
-  return CF_CONFIG;
-}
 
 // Returns true if the given URL is still a placeholder and should not be called.
 function _isPlaceholderUrl(url) {
