@@ -11,6 +11,10 @@ package-lock.json
 *.swp
 .idea/
 .vscode/
+.claude/
+
+# Local design preview harness (see chrome/popup/_preview.html)
+_preview.html
 
 # Environment files
 .env*

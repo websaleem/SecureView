@@ -10,13 +10,13 @@
   <div class="app">
     <!-- Header -->
     <div class="header">
-      <div class="header-left" style="display: flex; align-items: center; gap: 12px;">
-        <a href="https://secureview.websaleem.com" target="_blank" rel="noopener" title="SecureView" style="display: flex; align-items: center; line-height: 0;">
+      <div class="header-left">
+        <a class="logo-link" href="https://secureview.websaleem.com" target="_blank" rel="noopener" title="SecureView">
           <img class="logo" src="../icons/icon.png" alt="SecureView" />
         </a>
-        <span id="user-name" style="display: flex; align-items: center; font-size: 13px; font-weight: 700; color: var(--primary); height: 22px;">Hi, there</span>
+        <span id="user-name">Hi, there</span>
       </div>
-      <div class="header-right" style="display: flex; align-items: center; height: 100%;">
+      <div class="header-right">
         <span class="date" id="today-date"></span>
         <button class="icon-btn" id="history-btn" title="History">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -32,36 +32,37 @@
 
     <!-- Summary bar -->
     <div class="summary-bar">
-      <div class="summary-item">
+      <div class="summary-hero">
         <span class="summary-value" id="total-time">0m</span>
-        <span class="summary-label">Total Active</span>
+        <span class="summary-label">Active time</span>
       </div>
-      <div class="summary-divider"></div>
-      <div class="summary-item">
-        <span class="summary-value" id="site-count">0</span>
-        <span class="summary-label">Sites Visited</span>
-      </div>
-      <div class="summary-divider"></div>
-      <div class="summary-item">
-        <span class="summary-value" id="top-category">—</span>
-        <span class="summary-label">Top Category</span>
+      <div class="summary-meta">
+        <div class="summary-item">
+          <span class="summary-value" id="site-count">0</span>
+          <span class="summary-label">Sites</span>
+        </div>
+        <div class="summary-divider"></div>
+        <div class="summary-item summary-item-cat">
+          <span class="summary-value" id="top-category">—</span>
+          <span class="summary-label">Top category</span>
+        </div>
       </div>
     </div>
 
-    <!-- Period toggle -->
-    <div class="period-toggle">
-      <button class="period-btn active" id="period-today" data-period="today">Today</button>
-      <button class="period-btn" id="period-week" data-period="week">Last 7 days</button>
+    <!-- Controls: period on the left, view on the right -->
+    <div class="controls">
+      <div class="period-toggle segmented" role="tablist" aria-label="Time period">
+        <button class="period-btn active" id="period-today" data-period="today">Today</button>
+        <button class="period-btn" id="period-week" data-period="week">7 days</button>
+      </div>
+      <div class="view-toggle segmented" role="tablist" aria-label="Grouping">
+        <button class="toggle-btn active" id="btn-categories" data-view="categories">Categories</button>
+        <button class="toggle-btn" id="btn-sites" data-view="sites">Sites</button>
+      </div>
     </div>
 
     <!-- Per-day breakdown (visible in 7-day mode only) -->
     <div id="day-breakdown" class="day-breakdown hidden"></div>
-
-    <!-- View toggle -->
-    <div class="view-toggle">
-      <button class="toggle-btn active" id="btn-categories" data-view="categories">By Category</button>
-      <button class="toggle-btn" id="btn-sites" data-view="sites">By Site</button>
-    </div>
 
     <!-- Current page indicator -->
     <div class="current-page" id="current-page" style="display:none;">
@@ -86,7 +87,7 @@
     <!-- Sites view -->
     <div class="view-panel hidden" id="view-sites">
       <div class="search-box">
-        <input type="text" id="search-input" placeholder="🔎  Filter sites..." />
+        <input type="text" id="search-input" placeholder="Filter sites" />
       </div>
       <div id="site-list" class="site-list">
         <div class="empty-state">
