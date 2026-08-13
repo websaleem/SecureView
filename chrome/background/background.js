@@ -22,6 +22,11 @@ let stateLoaded = false;
 
 const SESSION_KEY = "sv_session";
 const IDLE_THRESHOLD_SECONDS = 60;
+// Upper bound on what a single flush may credit. The tick alarm runs every
+// minute, so anything much larger means the service worker was suspended or the
+// machine slept rather than that the user browsed continuously. Two minutes
+// leaves room for a late alarm without letting an eight-hour sleep through.
+const MAX_FLUSH_MS = 2 * 60 * 1000;
 const EXCLUDED_DOMAINS_KEY = "excluded_domains";
 const RETENTION_DAYS = 7;
 
@@ -114,13 +119,32 @@ function persistState() {
 
 // ─── Browsing data storage ────────────────────────────────────────────────────
 
-function getTodayKey() {
-  const now = new Date();
-  return `data_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}_${String(now.getDate()).padStart(2, "0")}`;
+function dayKeyFor(ts) {
+  const d = new Date(ts);
+  return `data_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}_${String(d.getDate()).padStart(2, "0")}`;
 }
 
-async function getStorageData() {
-  const key = getTodayKey();
+function getTodayKey() {
+  return dayKeyFor(Date.now());
+}
+
+// Split [startMs, endMs) into one segment per local calendar day, so a session
+// running across midnight is credited to the days it actually happened on
+// rather than landing entirely on whichever day the flush ran in.
+function splitByDay(startMs, endMs) {
+  const segments = [];
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const d = new Date(cursor);
+    const nextMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+    const segmentEnd = Math.min(nextMidnight, endMs);
+    segments.push({ key: dayKeyFor(cursor), ms: segmentEnd - cursor });
+    cursor = segmentEnd;
+  }
+  return segments;
+}
+
+async function getStorageData(key = getTodayKey()) {
   return new Promise((resolve) => {
     chrome.storage.local.get([key], (result) => {
       resolve(result[key] || { domains: {}, categories: {}, totalSeconds: 0 });
@@ -128,8 +152,7 @@ async function getStorageData() {
   });
 }
 
-async function saveStorageData(data) {
-  const key = getTodayKey();
+async function saveStorageData(data, key = getTodayKey()) {
   return new Promise((resolve) => {
     chrome.storage.local.set({ [key]: data }, resolve);
   });
@@ -144,10 +167,22 @@ async function flushTime(url) {
   }
 
   const now = Date.now();
-  const elapsed = Math.round((now - sessionStart) / 1000);
-  if (elapsed <= 0) return;
+  const spanMs = now - sessionStart;
+  if (spanMs <= 0) return;
 
-  // Advance the session start so the next flush doesn't double-count
+  // A gap far longer than the tick interval means the worker was suspended or
+  // the machine slept — the user was not browsing for most of it. Credit at
+  // most MAX_FLUSH_MS and drop the rest, so a closed laptop lid can no longer
+  // dump hours onto whatever page happened to be open.
+  let from = sessionStart;
+  if (spanMs > MAX_FLUSH_MS) {
+    Logger.info(LOG, `Gap of ${Math.round(spanMs / 1000)}s exceeds cap — crediting ${MAX_FLUSH_MS / 1000}s`);
+    from = now - MAX_FLUSH_MS;
+  }
+
+  // Advance the session start so the next flush doesn't double-count. Every
+  // millisecond of the span is accounted for below, either as whole seconds or
+  // as the sub-second remainder carried on the domain entry.
   sessionStart = now;
   persistState();
 
@@ -162,44 +197,57 @@ async function flushTime(url) {
   // Categorize outside the lock — slow, network-bound, internally cached.
   const category = await categorizeUrlEnhanced(url, currentTabTitle || "");
 
-  await withStorageLock(async () => {
-    const data = await getStorageData();
-    Logger.info(LOG, `Flush: ${hostname} → ${elapsed}s (${category.name})`);
+  for (const segment of splitByDay(from, now)) {
+    await withStorageLock(async () => {
+      const data = await getStorageData(segment.key);
 
-    if (!data.domains[hostname]) {
-      const initialTitle = currentTabTitle || "";
-      Logger.debug(LOG, `New domain entry: ${hostname}, title: "${initialTitle}"`);
-      data.domains[hostname] = {
-        url, hostname, title: initialTitle, seconds: 0,
-        category: category.name, categoryIcon: category.icon,
-        categoryColor: category.color, lastVisit: now
-      };
-    }
-    data.domains[hostname].seconds += elapsed;
-    data.domains[hostname].lastVisit = now;
-    data.domains[hostname].category = category.name;
-    data.domains[hostname].categoryIcon = category.icon;
-    data.domains[hostname].categoryColor = category.color;
-
-    // Recompute categories and totalSeconds from domain entries so that
-    // category changes (e.g. "Other" → "Technology" after ML classification)
-    // don't leave stale seconds in the old category.
-    data.categories = {};
-    data.totalSeconds = 0;
-    for (const d of Object.values(data.domains)) {
-      const cat = d.category || "Other";
-      if (!data.categories[cat]) {
-        data.categories[cat] = {
-          name: cat, icon: d.categoryIcon || "🌐",
-          color: d.categoryColor || "#7F8C8D", seconds: 0
+      if (!data.domains[hostname]) {
+        const initialTitle = currentTabTitle || "";
+        Logger.debug(LOG, `New domain entry: ${hostname}, title: "${initialTitle}"`);
+        data.domains[hostname] = {
+          url, hostname, title: initialTitle, seconds: 0, ms: 0,
+          category: category.name, categoryIcon: category.icon,
+          categoryColor: category.color, lastVisit: now
         };
       }
-      data.categories[cat].seconds += d.seconds;
-      data.totalSeconds += d.seconds;
-    }
+      const entry = data.domains[hostname];
 
-    await saveStorageData(data);
-  });
+      // Accumulate in milliseconds and only spill whole seconds into `seconds`.
+      // Rounding each flush independently used to bake the error in permanently,
+      // which showed up as a systematic over- or under-count whenever sessions
+      // were short (rapid tab switching).
+      const carried = (entry.ms || 0) + segment.ms;
+      const wholeSeconds = Math.floor(carried / 1000);
+      entry.seconds += wholeSeconds;
+      entry.ms = carried - wholeSeconds * 1000;
+
+      Logger.info(LOG, `Flush: ${hostname} → +${wholeSeconds}s (${category.name}) [${segment.key}]`);
+
+      entry.lastVisit = now;
+      entry.category = category.name;
+      entry.categoryIcon = category.icon;
+      entry.categoryColor = category.color;
+
+      // Recompute categories and totalSeconds from domain entries so that
+      // category changes (e.g. "Other" → "Technology" after ML classification)
+      // don't leave stale seconds in the old category.
+      data.categories = {};
+      data.totalSeconds = 0;
+      for (const d of Object.values(data.domains)) {
+        const cat = d.category || "Other";
+        if (!data.categories[cat]) {
+          data.categories[cat] = {
+            name: cat, icon: d.categoryIcon || "🌐",
+            color: d.categoryColor || "#7F8C8D", seconds: 0
+          };
+        }
+        data.categories[cat].seconds += d.seconds;
+        data.totalSeconds += d.seconds;
+      }
+
+      await saveStorageData(data, segment.key);
+    });
+  }
 }
 
 // ─── Session management ───────────────────────────────────────────────────────
@@ -229,7 +277,7 @@ function triggerEagerCategorization(url, title) {
         if (!data.domains[hostname]) {
           Logger.info(LOG, `Eager category set (new): ${hostname} → ${category.name}`);
           data.domains[hostname] = {
-            url, hostname, title: title || currentTabTitle || "", seconds: 0,
+            url, hostname, title: title || currentTabTitle || "", seconds: 0, ms: 0,
             category: category.name, categoryIcon: category.icon,
             categoryColor: category.color, lastVisit: Date.now()
           };
@@ -338,8 +386,15 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   await ready();
-  // Accept updates from the tracked tab OR if we have no tracked tab (after SW restart)
-  if (tabId !== activeTabId && activeTabId !== null) return;
+  // Accept updates from the tracked tab, or — when there is no tracked tab yet,
+  // as after a browser restart clears storage.session — from a tab that is
+  // genuinely the active one. Without the `tab.active` test, a background tab
+  // finishing its load first would capture tracking and accrue time the user
+  // never spent looking at it.
+  if (tabId !== activeTabId) {
+    if (activeTabId !== null) return;
+    if (!tab?.active) return;
+  }
   if (changeInfo.status === "complete" && tab.url) {
     Logger.debug(LOG, `Tab updated: ${tab.url} (tab ${tabId})`);
     await switchTo(tab.url, tabId, tab.title);
@@ -430,7 +485,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   if (message.type === "USER_ACTIVE") {
+    // Only the tab the user is actually looking at may clear the idle flag.
+    // The content script runs in every tab, and `scroll` fires on programmatic
+    // scrolling, so without this check an auto-scrolling page in a background
+    // tab could hold the session open indefinitely while the user was away —
+    // crediting that time to whatever page was in the foreground.
+    const senderTabId = sender.tab?.id;
     ready().then(() => {
+      if (senderTabId == null || senderTabId !== activeTabId) {
+        Logger.debug(LOG, `USER_ACTIVE ignored from non-active tab ${senderTabId}`);
+        return;
+      }
       Logger.debug(LOG, "USER_ACTIVE received from content script");
       if (isUserIdle) {
         isUserIdle = false;
@@ -623,15 +688,23 @@ async function sendEmailReport() {
   if (freq === "none") return;
   const numDays = freq === "daily" ? 1 : 7;
 
-  // Gather last `numDays` of browsing data
+  // Gather the last `numDays` calendar days, oldest first. Built from the
+  // calendar rather than from whichever data_ keys happen to exist: taking the
+  // most recent stored keys meant a week with quiet days silently reported a
+  // window wider than seven days.
   const data = await chrome.storage.local.get(null);
-  const keys = Object.keys(data).filter(k => k.startsWith("data_")).sort().reverse();
-  const days = keys.slice(0, numDays).map(k => {
-    const [, year, month, day] = k.split("_");
-    const d = new Date(year, month - 1, day);
-    const label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-    return { label, totalSeconds: data[k].totalSeconds || 0, categories: data[k].categories || {} };
-  });
+  const days = [];
+  for (let i = numDays - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = dayKeyFor(d.getTime());
+    const dayData = data[key] || {};
+    days.push({
+      label: d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      totalSeconds: dayData.totalSeconds || 0,
+      categories: dayData.categories || {}
+    });
+  }
 
   const apiUrl = config?.reportUrl;
   if (!apiUrl || _isPlaceholderUrl(apiUrl)) return;
