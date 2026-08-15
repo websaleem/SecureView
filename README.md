@@ -35,6 +35,14 @@ The workflow can also be run on demand via **Actions → Run workflow**.
 CHANNEL=beta ./scripts/build-zip.sh        # → SecureView-Beta-<version>.zip
 ```
 
+There is no bundler or `npm install` step — the extension is plain JS loaded via
+`<script>` and `importScripts`. For the production channel, set `PROD_CLOUDFRONT_URL` to the
+production distribution's bare origin (e.g. `https://dxxxx.cloudfront.net`); the script
+rewrites **both** `shared/config.js` and the `host_permissions` entry in `manifest.json`.
+They have to move together — the service worker's `fetch` is blocked if `host_permissions`
+doesn't cover the host it calls, so patching only the config silently breaks categorization
+in the built zip.
+
 ### Shipping a release
 
 ```bash
@@ -182,7 +190,7 @@ Categorization is triggered **immediately** when the content script sends `PAGE_
 
 The extension has four runtime components that communicate via Chrome APIs:
 
-**`background/background.js` (Service Worker)** — The core tracking engine. Maintains session state in `chrome.storage.session` (key: `sv_session`) so it survives service worker restarts. Tracks active tab, window focus, and idle state. On every tab switch or `PAGE_READY` message it calls `triggerEagerCategorization()`, which immediately classifies the URL+title and writes the result to the domain entry — no waiting for the alarm. Flushes accumulated dwell time to `chrome.storage.local` every 60 seconds via an alarm, and also on every tab switch. On first install (`onInstalled` reason `"install"`) opens `https://secureview.websaleem.com/success.html` in a new tab. `setUninstallURL` points to `https://secureview.websaleem.com/uninstall.html` so Chrome opens it automatically when the extension is removed.
+**`background/background.js` (Service Worker)** — The core tracking engine. Maintains session state in `chrome.storage.session` (key: `sv_session`) so it survives service worker restarts. Tracks active tab, window focus, and idle state. On every tab switch or `PAGE_READY` message it calls `triggerEagerCategorization()`, which immediately classifies the URL+title and writes the result to the domain entry — no waiting for the alarm. Flushes accumulated dwell time to `chrome.storage.local` every 60 seconds via an alarm, and also on every tab switch. On first install (`onInstalled` reason `"install"`) opens `https://secureview.websaleem.com/installsuccess.html` in a new tab. `setUninstallURL` points to `https://secureview.websaleem.com/uninstall.html` so Chrome opens it automatically when the extension is removed.
 
 **`content/content_script.js`** — Injected into all pages. Sends `PAGE_READY` (`{ title, url }`) to the background as soon as `document` load fires; re-sends whenever the `<title>` element changes (MutationObserver) to catch SPA navigation; re-sends on `visibilitychange` when the tab becomes visible again. Also detects user activity (mouse, keyboard, scroll) and sends `USER_ACTIVE` every 10 seconds while active.
 
@@ -190,7 +198,7 @@ The extension has four runtime components that communicate via Chrome APIs:
 
 **`shared/logger.js`** — Loaded in all four contexts (background SW, content script, popup, categorizer). Provides `Logger.debug/info/warn/error(module, message, ...args)`. Every log line is prefixed with a timestamp (`YYYY-MM-DD HH:MM:SS.mmm`), level, and module name. Errors always print; all other levels are gated by the `debug_config` flag (see Runtime Settings Flags below).
 
-**`shared/categories.js`** — Shared module imported by both `background.js` (via `importScripts`) and `popup.html` (via `<script>`). Defines categories with domain lists, keyword patterns, icons, and colors. Matching order: exact domain → root domain → keyword scan.
+**`shared/categories.js`** — Shared module imported by both `background.js` (via `importScripts`) and `popup.html` (via `<script>`). Defines categories with domain lists, keyword patterns, icons, and colors. Matching order: exact domain → subdomain → path-scoped rules (`google.com/travel`) → keyword scan. Host and path are matched as separate components, so a lookalike like `amazon.com.attacker.net` does **not** inherit the real domain's category. Note the keyword scan still matches a leading hostname label, so `paypal.com.phish.example` is keyword-matched as Finance — categorization is a labelling heuristic, not a phishing defence, and should never be treated as a trust signal.
 
 **`shared/categorizer.js`** — Imported by `background.js` via `importScripts`. Provides `categorizeUrlEnhanced(url, title)`, an async drop-in for `categorizeUrl()`. Rule-based first; for "Other" domains it calls a CloudFront distribution. Flow: `CloudFront (WAF) → Lambda@Edge (origin-request signs request) → API Gateway → Lambda → Bedrock`. Before the request leaves the device, `_safeUrlForApi(url)` strips the query string and fragment so only `protocol://host/path` is sent — query params and hashes are where session tokens, search terms, and PII tend to sit. Retries up to 2× with exponential backoff to handle Lambda@Edge cold starts. Results cached under `br_cat_cache`. Fails silently if unreachable.
 
@@ -204,6 +212,8 @@ Both flags are toggled live via `chrome.storage.local` — no extension reload r
 |---|---|---|
 | Debug logging | `debug_config` | Enables/disables all `Logger.debug/info/warn` output across every context. Errors always print. On by default in beta builds; off in prod. |
 | Force AI classification | `force_cloudfront` | Bypasses rule-based matching for all sites and sends every URL straight to the AWS pipeline. Useful for testing Bedrock responses against known domains. Browser-internal pages (`chrome://`, `about:`) are always classified locally regardless of this flag. |
+| Report address | `reportEmail` | Email address entered in Settings. Stored locally and never transmitted — see "Email reports" below. |
+| Report frequency | `emailReportFreq` | `daily` or `weekly`. Stored locally alongside `reportEmail`. |
 
 ```js
 // Debug logging
@@ -216,6 +226,22 @@ chrome.storage.local.set({ force_cloudfront: false })  // disable
 ```
 
 Both flags are watched via `chrome.storage.onChanged`, so changes take effect immediately in all active contexts.
+
+### Email reports
+
+There is **no account system**. The extension previously required a Cognito sign-in to
+receive emailed reports; the login flow, the `/report` endpoint, the email Lambda, and the
+Cognito user pool have all been removed.
+
+Settings still collects an email address and a `daily` / `weekly` frequency, but those are
+preferences held in `chrome.storage.local` only — no request is made and no report is sent.
+An empty address is the "off" state. Re-enabling delivery means standing up an endpoint
+again, and that endpoint must not be an unauthenticated mailer: without a sign-in, anything
+that accepts an address and sends to it can be used to send mail to strangers from the
+project's SES domain. Settle that design before wiring the UI back to a backend.
+
+On upgrade, `clearLegacyAuthStorage()` deletes any `accessToken`, `idToken`, `refreshToken`,
+and `customProfileName` left behind by the old login flow.
 
 ## Storage Schema
 

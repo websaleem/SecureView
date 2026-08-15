@@ -43,17 +43,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
     _excludedDomains = new Set(changes[EXCLUDED_DOMAINS_KEY].newValue || []);
     Logger.info(LOG, `Excluded domains updated: ${[..._excludedDomains].join(", ") || "none"}`);
   }
-  if (area === "local" && "emailReportFreq" in changes) {
-    const freq = changes.emailReportFreq.newValue || "daily";
-    if (freq === "none") {
-      chrome.alarms.clear("email-report");
-      Logger.info(LOG, `Email report frequency changed to none (alarm cleared)`);
-    } else {
-      const mins = freq === "daily" ? 1440 : 10080;
-      chrome.alarms.create("email-report", { periodInMinutes: mins });
-      Logger.info(LOG, `Email report frequency changed to ${freq} (${mins} mins)`);
-    }
-  }
 });
 
 // ─── Storage write serialization ──────────────────────────────────────────────
@@ -453,34 +442,34 @@ chrome.idle.onStateChanged.addListener(async (state) => {
   }
 });
 
-// Alarm: minimum 1 minute in Chrome MV3
-chrome.alarms.create("tick", { periodInMinutes: 1 });
-chrome.alarms.clear("daily-report");
-chrome.alarms.clear("weekly-report");
-chrome.alarms.get("email-report", (alarm) => {
-  chrome.storage.local.get(["emailReportFreq"], (res) => {
-    const freq = res.emailReportFreq || "daily";
-    if (freq === "none") {
-      if (alarm) chrome.alarms.clear("email-report");
-    } else if (!alarm) {
-      const mins = freq === "daily" ? 1440 : 10080;
-      chrome.alarms.create("email-report", { periodInMinutes: mins });
-    }
-  });
+// Alarm: minimum 1 minute in Chrome MV3.
+//
+// Only create the alarm if it doesn't already exist. chrome.alarms.create
+// REPLACES a same-named alarm and restarts its period, and this file's top
+// level re-runs on every service-worker cold start. Because the content script
+// pings USER_ACTIVE every 10s and the worker is torn down after ~30s idle,
+// unconditionally re-creating the alarm meant a browsing user reset the
+// 1-minute timer before it ever fired — so the tick never ran, and MAX_FLUSH_MS
+// then capped the eventual flush at two minutes no matter how long the page had
+// actually been open.
+chrome.alarms.get("tick", (alarm) => {
+  if (!alarm) chrome.alarms.create("tick", { periodInMinutes: 1 });
 });
 
+// Alarms left behind by earlier versions that mailed reports from the backend.
+// Clearing them stops upgraded installs waking the worker for work that no
+// longer exists.
+chrome.alarms.clear("daily-report");
+chrome.alarms.clear("weekly-report");
+chrome.alarms.clear("email-report");
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === "tick") {
-    await ready();
-    Logger.debug(LOG, "Alarm tick");
-    await ensureTracking();      // Re-establish tracking if SW was restarted
-    await flushTime(currentUrl); // Flush accumulated time to storage
-    await pruneOldData();        // Drop data_* keys past the retention window
-  } else if (alarm.name === "email-report") {
-    await ready();
-    Logger.info(LOG, "Running email report");
-    await sendEmailReport();
-  }
+  if (alarm.name !== "tick") return;
+  await ready();
+  Logger.debug(LOG, "Alarm tick");
+  await ensureTracking();      // Re-establish tracking if SW was restarted
+  await flushTime(currentUrl); // Flush accumulated time to storage
+  await pruneOldData();        // Drop data_* keys past the retention window
 });
 
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
@@ -522,9 +511,6 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
       }
       triggerEagerCategorization(senderUrl, title);
     });
-  } else if (message.type === "SIGNUP_SUCCESS") {
-    Logger.info(LOG, "SIGNUP_SUCCESS received, sending welcome email");
-    sendWelcomeEmail();
   }
   return false;
 });
@@ -562,194 +548,28 @@ async function init() {
   Logger.info(LOG, "Extension initialized");
 }
 
-chrome.runtime.setUninstallURL("https://secureview.websaleem.com/uninstall.html");
+// Storage left behind by the Cognito login flow that this version removes.
+// Access and refresh tokens are credentials — an install that upgrades into a
+// build with no login has no use for them and should not keep them on disk.
+const LEGACY_AUTH_KEYS = ["accessToken", "idToken", "refreshToken", "customProfileName"];
 
-const COGNITO_DOMAIN = SV_CONFIG.COGNITO_DOMAIN;
-const CLIENT_ID = SV_CONFIG.COGNITO_CLIENT_ID;
-const REDIRECT_URI = `https://${chrome.runtime.id}.chromiumapp.org/`;
+async function clearLegacyAuthStorage() {
+  const stored = await chrome.storage.local.get(LEGACY_AUTH_KEYS);
+  const present = LEGACY_AUTH_KEYS.filter((k) => k in stored);
+  if (present.length === 0) return;
+  await chrome.storage.local.remove(present);
+  Logger.info(LOG, `Removed ${present.length} legacy auth key(s) from storage`);
+}
+
+chrome.runtime.setUninstallURL("https://secureview.websaleem.com/uninstall.html");
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === chrome.runtime.OnInstalledReason.INSTALL || details.reason === "install") {
     // Open the external success page
     chrome.tabs.create({ url: "https://secureview.websaleem.com/installsuccess.html" });
   }
+  clearLegacyAuthStorage();
   init();
 });
 
-// Listen for messages from the external website (e.g. auth tokens)
-const ALLOWED_AUTH_ORIGINS = [
-  "https://secureview.websaleem.com"
-];
-
-chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
-  // Validate sender origin before processing auth tokens
-  const senderOrigin = sender.url ? new URL(sender.url).origin : "";
-  if (!ALLOWED_AUTH_ORIGINS.includes(senderOrigin)) {
-    Logger.warn(LOG, `Rejected external message from untrusted origin: ${senderOrigin}`);
-    sendResponse({ success: false, error: "Untrusted origin" });
-    return true;
-  }
-
-  if (request.type === "AUTH_SUCCESS" && request.tokens) {
-    Logger.info(LOG, "Received auth tokens from external website");
-    chrome.storage.local.set({
-      accessToken: request.tokens.accessToken,
-      idToken: request.tokens.idToken,
-      refreshToken: request.tokens.refreshToken || ""
-    }, () => {
-      sendResponse({ success: true });
-      // Send welcome email after tokens are saved
-      sendWelcomeEmail();
-    });
-    return true; // Keep message channel open for async sendResponse
-  }
-});
 chrome.runtime.onStartup.addListener(init);
-
-// ─── Token refresh ────────────────────────────────────────────────────────────
-// Cognito access tokens expire after ~1 hour. This function uses the stored
-// refresh token to obtain a new access token transparently.
-
-async function refreshAccessToken() {
-  const stored = await chrome.storage.local.get(['refreshToken']);
-  if (!stored.refreshToken) {
-    Logger.warn(LOG, "No refresh token available — user must re-login");
-    return null;
-  }
-
-  try {
-    const res = await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-amz-json-1.1",
-        "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
-      },
-      body: JSON.stringify({
-        AuthFlow: "REFRESH_TOKEN_AUTH",
-        ClientId: SV_CONFIG.COGNITO_CLIENT_ID,
-        AuthParameters: {
-          REFRESH_TOKEN: stored.refreshToken
-        }
-      })
-    });
-
-    if (!res.ok) {
-      Logger.warn(LOG, `Token refresh failed: HTTP ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const result = data.AuthenticationResult;
-    if (result?.AccessToken) {
-      await chrome.storage.local.set({
-        accessToken: result.AccessToken,
-        idToken: result.IdToken || (await chrome.storage.local.get(['idToken'])).idToken
-      });
-      Logger.info(LOG, "Access token refreshed successfully");
-      return result.AccessToken;
-    }
-  } catch (e) {
-    Logger.warn(LOG, "Token refresh error", e?.message);
-  }
-  return null;
-}
-
-async function getValidAccessToken() {
-  const stored = await chrome.storage.local.get(['accessToken']);
-  if (!stored.accessToken) return null;
-
-  // Try using the current token first; if Cognito rejects it, refresh
-  try {
-    await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-amz-json-1.1",
-        "X-Amz-Target": "AWSCognitoIdentityProviderService.GetUser"
-      },
-      body: JSON.stringify({ AccessToken: stored.accessToken })
-    }).then(r => { if (!r.ok) throw new Error(r.status); });
-    return stored.accessToken;
-  } catch {
-    Logger.info(LOG, "Access token expired, attempting refresh");
-    return await refreshAccessToken();
-  }
-}
-
-// ─── Email report ───────────────────────────────────────────────────────
-
-async function sendEmailReport() {
-  const accessToken = await getValidAccessToken();
-  if (!accessToken) return;
-
-  const config = getCFConfig();
-
-  const { emailReportFreq } = await chrome.storage.local.get(["emailReportFreq"]);
-  const freq = emailReportFreq || "daily";
-  if (freq === "none") return;
-  const numDays = freq === "daily" ? 1 : 7;
-
-  // Gather the last `numDays` calendar days, oldest first. Built from the
-  // calendar rather than from whichever data_ keys happen to exist: taking the
-  // most recent stored keys meant a week with quiet days silently reported a
-  // window wider than seven days.
-  const data = await chrome.storage.local.get(null);
-  const days = [];
-  for (let i = numDays - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = dayKeyFor(d.getTime());
-    const dayData = data[key] || {};
-    days.push({
-      label: d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
-      totalSeconds: dayData.totalSeconds || 0,
-      categories: dayData.categories || {}
-    });
-  }
-
-  const apiUrl = config?.reportUrl;
-  if (!apiUrl || _isPlaceholderUrl(apiUrl)) return;
-
-  try {
-    const res = await fetch(apiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
-      body: JSON.stringify({ days, frequency: freq, action: "report" })
-    });
-    if (res.ok) {
-      Logger.info("REPORT", "Email report sent successfully");
-    } else {
-      Logger.warn("REPORT", "Failed to send email report", res.status);
-    }
-  } catch (e) {
-    Logger.warn("REPORT", "Error sending email report", e?.message);
-  }
-}
-
-// ─── Welcome Email ────────────────────────────────────────────────────────────
-
-async function sendWelcomeEmail() {
-  const accessToken = await getValidAccessToken();
-  if (!accessToken) return;
-
-  const config = getCFConfig();
-  const apiUrl = config?.reportUrl;
-  if (!apiUrl || _isPlaceholderUrl(apiUrl)) return;
-
-  try {
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`
-      },
-      body: JSON.stringify({ action: 'welcome' })
-    });
-    if (res.ok) {
-      Logger.info("REPORT", "Welcome email sent successfully");
-    } else {
-      Logger.warn("REPORT", "Failed to send welcome email", res.status);
-    }
-  } catch (e) {
-    Logger.warn("REPORT", "Error sending welcome email", e?.message);
-  }
-}

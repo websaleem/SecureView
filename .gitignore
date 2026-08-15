@@ -19,3 +19,7 @@ _preview.html
 # Environment files
 .env*
 expressions.txt
+
+# Python
+__pycache__/
+*.pyc

@@ -25,19 +25,9 @@ function safeColor(c) {
   return /^#[0-9a-fA-F]{6}$/.test(String(c)) ? c : "#7F8C8D";
 }
 
-// Map raw Cognito SDK error messages to user-friendly text so internal
-// details (e.g. "User does not exist") are not exposed in the UI.
-function _friendlyCognitoError(msg) {
-  if (!msg) return "Something went wrong. Please try again.";
-  const m = msg.toLowerCase();
-  if (m.includes("not authorized") || m.includes("notauthorized"))     return "Session expired — please log in again.";
-  if (m.includes("user does not exist"))                                return "Account not found.";
-  if (m.includes("incorrect") && m.includes("password"))               return "Incorrect password.";
-  if (m.includes("password") && m.includes("policy"))                  return "Password does not meet requirements (min 8 chars, upper, lower, number).";
-  if (m.includes("limit exceeded") || m.includes("limitexceeded"))     return "Too many attempts — please wait a moment.";
-  if (m.includes("expired"))                                            return "Session expired — please log in again.";
-  return msg; // pass through if no mapping
-}
+// Pragmatic email check: one @, no whitespace, a dot-bearing domain. Deliberately
+// not RFC 5322 — the goal is to catch typos, not to police valid addresses.
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
 
 function formatDuration(seconds) {
   if (seconds < 60) return `${seconds}s`;
@@ -156,13 +146,17 @@ async function loadWeekData() {
   // stay consistent (avoids double-counting if a domain's category changed
   // mid-week).
   for (const d of Object.values(aggregated.domains)) {
-    if (!aggregated.categories[d.category]) {
-      aggregated.categories[d.category] = {
-        name: d.category, icon: d.categoryIcon,
-        color: d.categoryColor, seconds: 0,
+    // Fall back the same way the background does, so a record missing its
+    // category lands in "Other" rather than creating a literal "undefined"
+    // bucket that then renders as a category name.
+    const cat = d.category || "Other";
+    if (!aggregated.categories[cat]) {
+      aggregated.categories[cat] = {
+        name: cat, icon: d.categoryIcon || "🌐",
+        color: d.categoryColor || "#7F8C8D", seconds: 0,
       };
     }
-    aggregated.categories[d.category].seconds += d.seconds;
+    aggregated.categories[cat].seconds += d.seconds;
     aggregated.totalSeconds += d.seconds;
   }
 
@@ -229,8 +223,13 @@ function renderSites(data, filter = "") {
 
   if (filter) {
     const q = filter.toLowerCase();
+    // Every field is optional-guarded: a domain record written by an older
+    // version (or mid-categorization) can lack `category`, and an unguarded
+    // .toLowerCase() there threw and blanked the whole list while typing.
     sites = sites.filter(
-      (s) => s.hostname.includes(q) || (s.title && s.title.toLowerCase().includes(q)) || s.category.toLowerCase().includes(q)
+      (s) => (s.hostname || "").toLowerCase().includes(q)
+        || (s.title || "").toLowerCase().includes(q)
+        || (s.category || "").toLowerCase().includes(q)
     );
   }
 
@@ -391,14 +390,22 @@ const EXCLUDED_DOMAINS_KEY = "excluded_domains";
 
 async function loadSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get([Logger.CONFIG_KEY, "force_cloudfront", EXCLUDED_DOMAINS_KEY, "emailReportFreq"], (result) => {
-      resolve({
-        debugLog:        result[Logger.CONFIG_KEY]?.enabled === true,
-        forceCloudFront: result["force_cloudfront"] === true,
-        excludedDomains: result[EXCLUDED_DOMAINS_KEY] || [],
-        emailReportFreq: result["emailReportFreq"] || "daily"
-      });
-    });
+    chrome.storage.local.get(
+      [Logger.CONFIG_KEY, "force_cloudfront", EXCLUDED_DOMAINS_KEY, "emailReportFreq", "reportEmail"],
+      (result) => {
+        // "none" is a legacy value from the version that had a "No email"
+        // option; frequency is now daily/weekly only and an empty email is
+        // what turns reports off.
+        const freq = result["emailReportFreq"];
+        resolve({
+          debugLog:        result[Logger.CONFIG_KEY]?.enabled === true,
+          forceCloudFront: result["force_cloudfront"] === true,
+          excludedDomains: result[EXCLUDED_DOMAINS_KEY] || [],
+          emailReportFreq: freq === "weekly" ? "weekly" : "daily",
+          reportEmail:     typeof result["reportEmail"] === "string" ? result["reportEmail"] : ""
+        });
+      }
+    );
   });
 }
 
@@ -434,114 +441,21 @@ function renderExclusionList(domains, data) {
   });
 }
 
-async function cognitoRequest(target, payload) {
-  const doRequest = async (token) => {
-    // If the payload has an AccessToken field, update it with the provided token
-    const updatedPayload = payload.AccessToken ? { ...payload, AccessToken: token } : payload;
-    const res = await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-amz-json-1.1",
-        "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}`
-      },
-      body: JSON.stringify(updatedPayload)
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.__type || "Unknown error");
-    return data;
-  };
-
-  try {
-    return await doRequest(payload.AccessToken);
-  } catch (e) {
-    // If token expired, try refreshing
-    if (e.message && (e.message.includes("NotAuthorizedException") || e.message.includes("expired"))) {
-      const stored = await chrome.storage.local.get(['refreshToken']);
-      if (stored.refreshToken) {
-        try {
-          const refreshRes = await fetch(`https://cognito-idp.${SV_CONFIG.COGNITO_REGION}.amazonaws.com/`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-amz-json-1.1",
-              "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
-            },
-            body: JSON.stringify({
-              AuthFlow: "REFRESH_TOKEN_AUTH",
-              ClientId: SV_CONFIG.COGNITO_CLIENT_ID,
-              AuthParameters: { REFRESH_TOKEN: stored.refreshToken }
-            })
-          });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            const newToken = refreshData.AuthenticationResult?.AccessToken;
-            if (newToken) {
-              await chrome.storage.local.set({
-                accessToken: newToken,
-                idToken: refreshData.AuthenticationResult?.IdToken || (await chrome.storage.local.get(['idToken'])).idToken
-              });
-              Logger.info(LOG, "Token refreshed in popup");
-              return await doRequest(newToken);
-            }
-          }
-        } catch (refreshErr) {
-          Logger.warn(LOG, "Token refresh failed in popup", refreshErr?.message);
-        }
-      }
-    }
-    throw e;
-  }
-}
-
-async function loadProfileData() {
-  const btn = document.getElementById("profile-save-btn");
-  const msg = document.getElementById("profile-msg");
-  msg.textContent = "Loading...";
-  msg.style.color = "var(--text-muted)";
-  btn.disabled = true;
-
-  try {
-    const tokens = await chrome.storage.local.get(['accessToken']);
-    if (!tokens.accessToken) return;
-
-    const res = await cognitoRequest("GetUser", { AccessToken: tokens.accessToken });
-    const attrs = res.UserAttributes || [];
-    
-    let name = "", type = "Adult", parent = "", email = "";
-    attrs.forEach(a => {
-      if (a.Name === "name") name = a.Value;
-      if (a.Name === "custom:account_type") type = a.Value;
-      if (a.Name === "custom:parent_name") parent = a.Value;
-      if (a.Name === "email") email = a.Value;
-    });
-
-    document.getElementById("profile-email").value = email;
-    document.getElementById("profile-name").value = name;
-    const radio = document.querySelector(`input[name="profileAccountType"][value="${type}"]`);
-    if (radio) radio.checked = true;
-    document.getElementById("profile-parent").value = parent;
-    
-    if (type !== "Child") {
-      document.getElementById("profile-parent-group").classList.add("hidden");
-    } else {
-      document.getElementById("profile-parent-group").classList.remove("hidden");
-    }
-    
-    msg.textContent = "";
-  } catch (e) {
-    msg.textContent = "Error loading profile.";
-    msg.style.color = "#ef4444";
-  } finally {
-    btn.disabled = false;
-  }
-}
-
 async function renderSettings(data) {
   const settings = await loadSettings();
   document.getElementById("setting-debug-log").checked = settings.debugLog;
   document.getElementById("setting-force-cf").checked  = settings.forceCloudFront;
-  document.getElementById("setting-report-freq").value = settings.emailReportFreq;
+  document.getElementById("report-email").value        = settings.reportEmail;
+  document.getElementById("report-msg").textContent    = "";
+  // Frequency is a segmented control, not a <select> — reflect it by class.
+  document.getElementById("report-freq")
+    .querySelectorAll(".toggle-btn")
+    .forEach((btn) => {
+      const on = btn.dataset.freq === settings.emailReportFreq;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-checked", String(on));
+    });
   renderExclusionList(settings.excludedDomains, data);
-  await loadProfileData();
 }
 
 function renderHistoryGraph(all) {
@@ -568,13 +482,16 @@ function renderHistoryGraph(all) {
     const total = data.totalSeconds || 0;
     const heightPct = maxSeconds > 0 ? (total / maxSeconds) * 100 : 0;
     
-    const cats = Object.entries(data.categories || {}).sort((a, b) => b[1].time - a[1].time);
-      
+    // Sort on `seconds` — the key the stored category records actually use.
+    // This read `.time`, which is undefined, so every comparison was NaN and
+    // the sort silently did nothing.
+    const cats = Object.entries(data.categories || {}).sort((a, b) => (b[1].seconds || 0) - (a[1].seconds || 0));
+
     let segmentsHtml = '';
-    cats.forEach(([catName, catData]) => {
+    cats.forEach(([, catData]) => {
       const segPct = total > 0 ? ((catData.seconds || 0) / total) * 100 : 0;
       if (segPct > 0) {
-        segmentsHtml += `<div class="graph-segment" style="height: ${segPct}%; background-color: ${catData.color || '#ccc'};"></div>`;
+        segmentsHtml += `<div class="graph-segment" style="height: ${segPct}%; background-color: ${safeColor(catData.color)};"></div>`;
       }
     });
 
@@ -620,37 +537,8 @@ async function renderHistory() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-function decodeJWT(token) {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(atob(base64));
-  } catch (e) {
-    return null;
-  }
-}
-
 async function init() {
   await Logger.init();
-  
-  const tokens = await chrome.storage.local.get(['accessToken', 'idToken', 'customProfileName']);
-  // TODO: Re-enable auth redirect for production
-  // if (!tokens.accessToken) {
-  //   window.location.href = "login.html";
-  //   return;
-  // }
-
-  const el = document.getElementById('user-name');
-  if (el) el.textContent = "Hi, there";
-
-  if (tokens.customProfileName) {
-    if (el) el.textContent = `Hi, ${tokens.customProfileName.split(' ')[0]}`;
-  } else if (tokens.idToken) {
-    const payload = decodeJWT(tokens.idToken);
-    if (payload && payload.name) {
-      if (el) el.textContent = `Hi, ${payload.name.split(' ')[0]}`;
-    }
-  }
 
   const manifest = chrome.runtime.getManifest();
   document.getElementById("footer-version").textContent = `SecureView v${manifest.version}`;
@@ -777,96 +665,104 @@ async function init() {
     document.getElementById("settings-overlay").classList.add("hidden");
   });
 
-  // Profile Listeners
-  document.querySelectorAll('input[name="profileAccountType"]').forEach(r => {
-    r.addEventListener("change", e => {
-      if (e.target.value !== "Child") {
-        document.getElementById("profile-parent-group").classList.add("hidden");
-      } else {
-        document.getElementById("profile-parent-group").classList.remove("hidden");
-      }
+  // ── Email report preferences ────────────────────────────────────────────
+  // Stored locally only. Nothing reads these off the device yet — the backend
+  // report endpoint was removed along with the login flow.
+  //
+  // Both controls save themselves: the frequency toggle on click, the address
+  // once it parses as valid. There is no save button, so an address that never
+  // becomes valid is simply never written — the inline message is the only
+  // signal the user gets, which is why it distinguishes "typing" from "wrong".
+  const reportEmailInput = document.getElementById("report-email");
+  const reportFreqGroup  = document.getElementById("report-freq");
+  const reportMsg        = document.getElementById("report-msg");
+  const EMAIL_SAVE_DEBOUNCE_MS = 600;
+
+  let _msgTimer = null;
+  function setReportMsg(text, kind) {
+    clearTimeout(_msgTimer);
+    reportMsg.textContent = text;
+    reportMsg.classList.toggle("is-error", kind === "error");
+    reportMsg.classList.toggle("is-ok", kind === "ok");
+    if (kind === "ok") _msgTimer = setTimeout(() => setReportMsg("", null), 2500);
+  }
+
+  function currentFreq() {
+    const active = reportFreqGroup.querySelector(".toggle-btn.active");
+    return active?.dataset.freq === "weekly" ? "weekly" : "daily";
+  }
+
+  function paintFreq(freq) {
+    reportFreqGroup.querySelectorAll(".toggle-btn").forEach((btn) => {
+      const on = btn.dataset.freq === freq;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-checked", String(on));
     });
+  }
+
+  async function persistReportPrefs(email, freq) {
+    await new Promise((resolve) =>
+      chrome.storage.local.set({ reportEmail: email, emailReportFreq: freq }, resolve)
+    );
+    Logger.info(LOG, `Report preferences saved (frequency: ${freq}, email ${email ? "set" : "cleared"})`);
+  }
+
+  // Writes only when the address is usable. An empty field is a legitimate
+  // "reports off" state and saves; a malformed one reports the problem and
+  // leaves whatever was last stored untouched.
+  async function saveEmail({ silent = false } = {}) {
+    const email = reportEmailInput.value.trim();
+    if (email && !EMAIL_RE.test(email)) {
+      if (!silent) setReportMsg("Not a valid email address yet.", "error");
+      return false;
+    }
+    try {
+      await persistReportPrefs(email, currentFreq());
+      setReportMsg(email ? "Saved." : "Saved — reports off.", "ok");
+      return true;
+    } catch (e) {
+      setReportMsg("Could not save. Please try again.", "error");
+      Logger.warn(LOG, "Failed to save report preferences", e?.message);
+      return false;
+    }
+  }
+
+  // Debounced so a save doesn't fire on every keystroke mid-address. While the
+  // user is still typing, a not-yet-valid value stays quiet rather than
+  // flashing an error at them character by character.
+  let _emailTimer = null;
+  reportEmailInput.addEventListener("input", () => {
+    clearTimeout(_emailTimer);
+    setReportMsg("", null);
+    _emailTimer = setTimeout(() => saveEmail({ silent: true }), EMAIL_SAVE_DEBOUNCE_MS);
   });
 
-  document.getElementById("profile-save-btn").addEventListener("click", async () => {
-    const btn = document.getElementById("profile-save-btn");
-    const msg = document.getElementById("profile-msg");
-    const name = document.getElementById("profile-name").value.trim();
-    const type = document.querySelector('input[name="profileAccountType"]:checked').value;
-    const parent = document.getElementById("profile-parent").value.trim();
-
-    if (!name) {
-      msg.textContent = "Name is required."; msg.style.color = "#ef4444"; return;
-    }
-    if (type === "Child" && !parent) {
-      msg.textContent = "Parent name is required."; msg.style.color = "#ef4444"; return;
-    }
-
-    btn.disabled = true;
-    msg.textContent = "Saving...";
-    msg.style.color = "var(--text-muted)";
-
-    try {
-      const tokens = await chrome.storage.local.get(['accessToken']);
-      const attrs = [
-        { Name: "name", Value: name },
-        { Name: "custom:account_type", Value: type }
-      ];
-      if (type === "Child") attrs.push({ Name: "custom:parent_name", Value: parent });
-      else attrs.push({ Name: "custom:parent_name", Value: "" });
-
-      await cognitoRequest("UpdateUserAttributes", {
-        AccessToken: tokens.accessToken,
-        UserAttributes: attrs
-      });
-
-      await chrome.storage.local.set({ customProfileName: name });
-      const el = document.getElementById('user-name');
-      if (el) el.textContent = `Hi, ${name.split(' ')[0]}`;
-
-      msg.textContent = "Profile saved!";
-      msg.style.color = "#10b981"; // success green
-    } catch (e) {
-      msg.textContent = _friendlyCognitoError(e.message);
-      msg.style.color = "#ef4444";
-    } finally {
-      btn.disabled = false;
-      setTimeout(() => { if (msg.textContent === "Profile saved!") msg.textContent = ""; }, 3000);
-    }
+  // Leaving the field or pressing Enter commits immediately, and here a
+  // malformed address is worth calling out — the user is done editing.
+  reportEmailInput.addEventListener("blur", () => {
+    clearTimeout(_emailTimer);
+    saveEmail();
+  });
+  reportEmailInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    clearTimeout(_emailTimer);
+    saveEmail();
   });
 
-  document.getElementById("password-save-btn").addEventListener("click", async () => {
-    const btn = document.getElementById("password-save-btn");
-    const msg = document.getElementById("password-msg");
-    const oldPass = document.getElementById("profile-old-pass").value;
-    const newPass = document.getElementById("profile-new-pass").value;
-
-    if (!oldPass || !newPass) {
-      msg.textContent = "Both passwords required."; msg.style.color = "#ef4444"; return;
-    }
-
-    btn.disabled = true;
-    msg.textContent = "Updating...";
-    msg.style.color = "var(--text-muted)";
-
+  reportFreqGroup.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".toggle-btn");
+    if (!btn || btn.classList.contains("active")) return;
+    const freq = btn.dataset.freq === "weekly" ? "weekly" : "daily";
+    paintFreq(freq);
+    // Persist the stored address, not whatever half-typed text is in the box,
+    // so switching frequency can never write a malformed address.
+    const { reportEmail } = await loadSettings();
     try {
-      const tokens = await chrome.storage.local.get(['accessToken']);
-      await cognitoRequest("ChangePassword", {
-        AccessToken: tokens.accessToken,
-        PreviousPassword: oldPass,
-        ProposedPassword: newPass
-      });
-
-      msg.textContent = "Password updated!";
-      msg.style.color = "#10b981";
-      document.getElementById("profile-old-pass").value = "";
-      document.getElementById("profile-new-pass").value = "";
-    } catch (e) {
-      msg.textContent = _friendlyCognitoError(e.message);
-      msg.style.color = "#ef4444";
-    } finally {
-      btn.disabled = false;
-      setTimeout(() => { if (msg.textContent === "Password updated!") msg.textContent = ""; }, 3000);
+      await persistReportPrefs(reportEmail, freq);
+      setReportMsg(`Saved — ${freq}.`, "ok");
+    } catch (err) {
+      setReportMsg("Could not save. Please try again.", "error");
+      Logger.warn(LOG, "Failed to save report frequency", err?.message);
     }
   });
 
@@ -881,12 +777,6 @@ async function init() {
     const enabled = e.target.checked;
     chrome.storage.local.set({ force_cloudfront: enabled });
     Logger.info(LOG, `Force CloudFront ${enabled ? "enabled" : "disabled"} via settings`);
-  });
-
-  document.getElementById("setting-report-freq").addEventListener("change", (e) => {
-    const freq = e.target.value;
-    chrome.storage.local.set({ emailReportFreq: freq });
-    Logger.info(LOG, `Email report frequency set to ${freq}`);
   });
 
   document.getElementById("exclusion-add-btn").addEventListener("click", async () => {

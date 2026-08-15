@@ -1,5 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: SecureView backend stack — Documents the complete existing architecture (CloudFront, WAF, Lambda@Edge, API Gateway, Bedrock Lambda).
+Description: SecureView backend stack — CloudFront, WAF, Lambda@Edge, API Gateway, Bedrock Lambda.
+
+# NOTE: the Cognito user pool, client, and domain that used to live here were
+# removed along with the extension's login flow. Deleting them from this
+# template means the next deploy destroys the pool and every account in it.
+#
+# NOTE: Lambda@Edge functions must be created in us-east-1. Deploy this stack
+# there, or split the edge function into its own us-east-1 stack.
 
 Parameters:
   Environment:
@@ -10,77 +17,44 @@ Parameters:
       - prod
     Description: Deployment environment (dev or prod)
 
+  ApiStageName:
+    Type: String
+    Default: live
+    Description: >-
+      API Gateway stage name. Also used as the CloudFront origin's OriginPath,
+      which the edge function reads off the event when signing — so this can be
+      changed here without touching the function code.
+
 Resources:
-  # ───────── Cognito User Pool ─────────
-  SecureViewUserPool:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UserPoolName: !Sub "SecureViewUsers-${Environment}"
-      AutoVerifiedAttributes:
-        - email
-      UsernameAttributes:
-        - email
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: false
-          RequireUppercase: true
-
-  SecureViewUserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-    Properties:
-      Domain: !Sub "secureview-auth-${AWS::AccountId}-${Environment}"
-      UserPoolId: !Ref SecureViewUserPool
-
-  SecureViewUserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      ClientName: !Sub "SecureViewExtensionClient-${Environment}"
-      UserPoolId: !Ref SecureViewUserPool
-      GenerateSecret: false
-      SupportedIdentityProviders:
-        - COGNITO
-      ExplicitAuthFlows:
-        - ALLOW_USER_PASSWORD_AUTH
-        - ALLOW_REFRESH_TOKEN_AUTH
-        - ALLOW_USER_SRP_AUTH
-      AllowedOAuthFlowsUserPoolClient: true
-      AllowedOAuthFlows:
-        - code
-      AllowedOAuthScopes:
-        - email
-        - openid
-        - profile
-      CallbackURLs:
-        - "https://ojhmodiiehcingcnhlglenenoemmegim.chromiumapp.org/"
-
   # ───────── WAFv2 WebACL (Global for CloudFront) ─────────
+  # /categorize is unauthenticated, so this rate limit is the only thing
+  # standing between a discovered endpoint and an unbounded Bedrock bill. It was
+  # previously commented out in full, which left the resource with no Type and
+  # made the whole template fail to deploy.
   SecureViewWebACL:
-  #   Type: AWS::WAFv2::WebACL
-  #   Properties:
-  #     Name: !Sub "SecureView-RateLimit-Global-${Environment}"
-  #     Scope: CLOUDFRONT
-  #     DefaultAction:
-  #       Allow: {}
-  #     VisibilityConfig:
-  #       CloudWatchMetricsEnabled: true
-  #       MetricName: !Sub "SecureView-WAF-Global-${Environment}"
-  #       SampledRequestsEnabled: true
-  #     Rules:
-  #       - Name: RateLimitByIP
-  #         Priority: 1
-  #         Action:
-  #           Block: {}
-  #         Statement:
-  #           RateBasedStatement:
-  #             Limit: 100
-  #             AggregateKeyType: IP
-  #         VisibilityConfig:
-  #           CloudWatchMetricsEnabled: true
-  #           MetricName: RateLimitRule
-  #           SampledRequestsEnabled: true
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "SecureView-RateLimit-Global-${Environment}"
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "SecureViewWAFGlobal${Environment}"
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: RateLimitByIP
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+            SampledRequestsEnabled: true
 
   # ───────── Lambda@Edge IAM Role ─────────
   SecureViewEdgeLambdaRole:
@@ -160,7 +134,11 @@ Resources:
                 Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                Resource: '*'
+                # Scoped to the Nova Pro inference profile and the foundation
+                # models it fans out to, rather than every model in the account.
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/apac.amazon.nova-pro-v1:0"
+                  - !Sub "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0"
 
   # ───────── Bedrock Lambda Function ─────────
   SecureViewBedrockLambda:
@@ -177,6 +155,13 @@ Resources:
         ZipFile: |
           def lambda_handler(event, context):
               pass
+
+  # Bounded retention: these logs are on the path that handles browsing data.
+  SecureViewBedrockLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/svCategorizeURL-${Environment}"
+      RetentionInDays: 14
 
   SecureViewBedrockLambdaVersion:
     Type: AWS::Lambda::Version
@@ -225,169 +210,20 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SecureViewBedrockLambda.Arn}/invocations"
 
-  # ───────── Email Lambda ─────────
-  SecureViewEmailLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: SecureViewEmailLambdaPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: arn:aws:logs:*:*:*
-              - Effect: Allow
-                Action:
-                  - ses:SendEmail
-                  - ses:SendRawEmail
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - cognito-idp:GetUser
-                Resource: "*"
-
-  SecureViewEmailLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "svSendEmailReport-${Environment}"
-      Handler: send_email.lambda_handler
-      Runtime: python3.12
-      Role: !GetAtt SecureViewEmailLambdaRole.Arn
-      Timeout: 15
-      MemorySize: 128
-      Code:
-        ZipFile: |
-          import json, boto3, os, re
-          ses = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'ap-southeast-2'))
-          cog = boto3.client('cognito-idp', region_name=os.environ.get('AWS_REGION', 'ap-southeast-2'))
-          _HEX = re.compile(r'^#[0-9a-fA-F]{6}$')
-          def _esc(s):
-              if s is None: return ""
-              return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
-          def _col(c):
-              return str(c) if c and _HEX.match(str(c)) else "#7F8C8D"
-          def lambda_handler(event, context):
-              try:
-                  hdrs = event.get('headers', {}) or {}
-                  auth = hdrs.get('Authorization','') or hdrs.get('authorization','')
-                  token = auth[7:] if auth.startswith('Bearer ') else None
-                  body = json.loads(event.get('body', '{}'))
-                  if not token: token = body.get('accessToken')
-                  if not token: return {'statusCode':401,'body':json.dumps({'message':'Missing authentication'})}
-                  usr = cog.get_user(AccessToken=token)
-                  email = next((a['Value'] for a in usr['UserAttributes'] if a['Name']=='email'), None)
-                  name = next((a['Value'] for a in usr['UserAttributes'] if a['Name']=='name'), 'User')
-                  days = body.get('days', [])
-                  action = body.get('action', 'report')
-                  raw_freq = body.get('frequency', 'weekly')
-                  freq = raw_freq.capitalize() if isinstance(raw_freq, str) and raw_freq.lower() in ('daily', 'weekly') else 'Daily'
-                  if not email: return {'statusCode':400,'body':json.dumps({'message':'User has no email'})}
-                  
-                  if action == 'welcome':
-                      html = f"<html><body><div style='max-width:600px;margin:auto;font-family:sans-serif'><h2>Welcome to SecureView, {_esc(name)}!</h2><p>Thanks for installing SecureView. We're excited to help you understand your browsing habits.</p><p><b>What to expect:</b></p><ul><li><b>Daily Tracking:</b> We'll automatically categorize your web activity using AI.</li><li><b>Regular Reports:</b> You'll receive emails like this one, summarizing your browsing time across different categories.</li><li><b>Privacy First:</b> Your detailed browsing history stays on your device. We only send summarized category data to generate your reports.</li></ul><p>Happy browsing!</p></div></body></html>"
-                      subject = 'Welcome to SecureView!'
-                  elif action == 'report':
-                      tot = sum(d.get('totalSeconds',0) for d in days)
-                      html = f"<html><body><div style='max-width:600px;margin:auto;font-family:sans-serif'><h2>SecureView {freq} Report for {_esc(name)}</h2><p>Total: <b>{tot/3600:.1f}h</b></p>"
-                      for day in days:
-                          dt, ds = _esc(day.get('label','')), day.get('totalSeconds',0)
-                          cats = day.get('categories',{})
-                          bar = ""
-                          for cn, cd in cats.items():
-                              if ds > 0:
-                                  p = (cd.get('seconds',0)/ds)*100
-                                  if p > 0: bar += f'<div style="width:{p:.0f}%;background:{_col(cd.get("color"))};height:100%;display:inline-block" title="{_esc(cn)}"></div>'
-                          html += f"<div style='background:#f8fafc;border:1px solid #e2e8f0;padding:12px;margin:8px 0;border-radius:8px'><b>{dt}</b> {ds//3600}h {(ds%3600)//60}m<div style='height:20px;border-radius:4px;overflow:hidden;margin-top:6px'>{bar}</div></div>"
-                      html += "</div></body></html>"
-                      subject = 'Your SecureView Browsing Report'
-                  else:
-                      return {'statusCode':400,'body':json.dumps({'message':'Invalid action'})}
-                  
-                  ses.send_email(Source=email,Destination={'ToAddresses':[email]},Message={'Subject':{'Data':subject},'Body':{'Html':{'Data':html}}})
-                  return {'statusCode':200,'body':json.dumps({'message':'Email sent'})}
-              except cog.exceptions.NotAuthorizedException:
-                  return {'statusCode':401,'body':json.dumps({'message':'Invalid or expired token'})}
-              except Exception as e:
-                  print(f"Email error: {e}")
-                  return {'statusCode':500,'body':json.dumps({'message':'Internal error'})}
-
-  SecureViewEmailApiGatewayResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref SecureViewApiGateway
-      ParentId: !GetAtt SecureViewApiGateway.RootResourceId
-      PathPart: report
-
-  SecureViewEmailApiGatewayMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref SecureViewApiGateway
-      ResourceId: !Ref SecureViewEmailApiGatewayResource
-      HttpMethod: POST
-      AuthorizationType: NONE
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SecureViewEmailLambda.Arn}/invocations"
-
-  SecureViewEmailApiGatewayOptionsMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref SecureViewApiGateway
-      ResourceId: !Ref SecureViewEmailApiGatewayResource
-      HttpMethod: OPTIONS
-      AuthorizationType: NONE
-      Integration:
-        Type: MOCK
-        RequestTemplates:
-          application/json: '{"statusCode": 200}'
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
-              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
-            method.response.header.Access-Control-Allow-Origin: true
-
-  SecureViewEmailLambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt SecureViewEmailLambda.Arn
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/report"
-
+  # ───────── API Gateway Deployment / Stage ─────────
   SecureViewApiGatewayDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
       - SecureViewApiGatewayMethod
-      - SecureViewEmailApiGatewayMethod
-      - SecureViewEmailApiGatewayOptionsMethod
     Properties:
       RestApiId: !Ref SecureViewApiGateway
 
-  SecureViewApiGatewayStageProd:
+  SecureViewApiGatewayStage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref SecureViewApiGateway
       DeploymentId: !Ref SecureViewApiGatewayDeployment
-      StageName: live
+      StageName: !Ref ApiStageName
       MethodSettings:
         - HttpMethod: "*"
           ResourcePath: "/*"
@@ -403,15 +239,25 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/categorize"
 
-  SecureViewEmailLambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt SecureViewEmailLambda.Arn
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SecureViewApiGateway}/*/POST/report"
-
   # ───────── CloudFront Distribution ─────────
+  # ⚠ Production drift — read before deploying.
+  #
+  # The distribution the extension actually calls (d1pjkjoqck0lva.cloudfront.net,
+  # E13N2TZOSX24F7) belongs to the older `secureview-backend-dev` stack, not to
+  # the `SecureViewBackend-${Environment}` stack this template deploys. It also
+  # serves the marketing site from S3, so it carries an ordered cache behaviour
+  # for `*` that this template does not model.
+  #
+  # That ordered `*` behaviour allows only GET and HEAD, and CloudFront matches
+  # ordered behaviours BEFORE the default one — so every POST to /categorize is
+  # rejected at the edge with
+  #   "This distribution is not configured to allow the HTTP request method..."
+  # and the Lambda@Edge below never runs. That is why AI categorisation is dead
+  # on that distribution.
+  #
+  # The explicit /categorize behaviour below is what keeps the API path ahead of
+  # any catch-all. Any distribution that fronts both the site and this API needs
+  # it.
   SecureViewDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -422,7 +268,10 @@ Resources:
         Origins:
           - Id: SecureViewApiGatewayOrigin
             DomainName: !Sub "${SecureViewApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
-            OriginPath: /live
+            # CloudFront prepends this to the request URI on the way to the
+            # origin. The edge function reads it off the event so it signs the
+            # same path API Gateway will see.
+            OriginPath: !Sub "/${ApiStageName}"
             CustomOriginConfig:
               OriginProtocolPolicy: https-only
               HTTPPort: 80
@@ -449,20 +298,28 @@ Resources:
             - EventType: origin-request
               LambdaFunctionARN: !Ref SecureViewEdgeLambdaVersion
               IncludeBody: true
+        CacheBehaviors:
+          # Ordered behaviours are evaluated before DefaultCacheBehavior, so the
+          # API paths must appear here to survive alongside any `*` behaviour.
+          - PathPattern: /categorize
+            TargetOriginId: SecureViewApiGatewayOrigin
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref SecureViewEdgeLambdaVersion
+                IncludeBody: true
 
 Outputs:
   DistributionDomainName:
     Description: CloudFront Distribution Domain Name
     Value: !GetAtt SecureViewDistribution.DomainName
-  
-  UserPoolId:
-    Description: Cognito User Pool ID
-    Value: !Ref SecureViewUserPool
 
-  UserPoolClientId:
-    Description: Cognito User Pool Client ID
-    Value: !Ref SecureViewUserPoolClient
-
-  CognitoDomain:
-    Description: Cognito Auth Domain
-    Value: !Sub "secureview-auth-${AWS::AccountId}-${Environment}.auth.${AWS::Region}.amazoncognito.com"
+  CategorizeEndpoint:
+    Description: Endpoint the extension calls (set as _CF_HOST in chrome/shared/config.js)
+    Value: !Sub "https://${SecureViewDistribution.DomainName}/categorize"

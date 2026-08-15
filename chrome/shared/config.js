@@ -1,18 +1,15 @@
 // SecureView shared configuration
-// Single source of truth for auth and API settings used across
-// background.js, popup.js, login.js, and signup.js.
+// Single source of truth for API settings used by background.js.
+//
+// The production build rewrites _CF_HOST (and the matching host_permissions
+// entry in manifest.json) via scripts/build-zip.sh — keep the two in sync, or
+// the service worker's fetch will be blocked by the missing host permission.
 
-const SV_CONFIG = {
-  COGNITO_REGION: "ap-southeast-2",
-  COGNITO_CLIENT_ID: "1bpn546e7vk1bm95ncbr0u5ma8",
-  COGNITO_DOMAIN: "secureview-auth-715626528514-dev.auth.ap-southeast-2.amazoncognito.com",
-};
-
-// Obfuscated domain construction to evade automated GitHub scraping bots
+// Split-string construction to keep the host out of naive repo scrapers. This
+// is obfuscation, not a secret: the value ships in the extension either way.
 const _CF_HOST = ["https://", "d1pjkjoqck0lva", ".cloudfront", ".net"].join("");
 const CF_CONFIG = {
-  url: `${_CF_HOST}/categorize`,
-  reportUrl: `${_CF_HOST}/report`
+  url: `${_CF_HOST}/categorize`
 };
 
 function getCFConfig() {

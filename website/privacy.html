@@ -34,7 +34,7 @@
     <h1 style="margin:0;">SecureView – Privacy Policy</h1>
   </div>
   <p class="meta">
-    Last updated: July 31, 2026 &nbsp;·&nbsp; Version 1.0.1<br />
+    Last updated: August 15, 2026 &nbsp;·&nbsp; Version 1.0.2<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -70,7 +70,7 @@
   <p>
     For websites that cannot be classified by the built-in rule set, SecureView optionally
     calls an AI classification service to determine a category. This behaviour can also be
-    enabled for all sites via the "Always use AI Categorization" setting.
+    enabled for all sites via the "Force AI Classification" setting.
   </p>
   <p>When a classification request is made, the following fields are sent:</p>
   <ul>
@@ -82,8 +82,9 @@
     Requests are routed through an AWS CloudFront distribution, validated by a
     Lambda@Edge function, forwarded to Amazon API Gateway, processed by an AWS Lambda
     function, and classified by <strong>Amazon Bedrock</strong>. Only the category label
-    is returned and stored. The real API key never leaves the server infrastructure;
-    the extension only holds a lightweight shared secret.
+    is returned and stored. The extension holds no API key or shared secret of any kind —
+    the request is signed at the CloudFront edge, where the browser never sees the
+    credential.
   </p>
   <p>
     Classification results are cached locally under the key <code>br_cat_cache</code>
@@ -91,17 +92,21 @@
   </p>
   <p>
     <strong>No browsing data is sent if:</strong> the domain is already matched by the
-    built-in rule set and "Always use AI Categorization" is off, or the domain is on
+    built-in rule set and "Force AI Classification" is off, or the domain is on
     your exclusion list.
   </p>
 
   <h2>3a. Email Reports</h2>
   <p>
-    If you enable email reports, SecureView periodically sends a summary of your browsing
-    activity (category names and time breakdowns — no individual URLs) to an AWS Lambda
-    function, which generates and sends the report to your registered email address via
-    Amazon SES. Your Cognito access token is sent in the request for authentication.
-    No detailed browsing history or page titles are included in the report payload.
+    Email reports are <strong>not currently active</strong>. The settings panel lets you save
+    an email address and a delivery frequency, but those values are stored only in
+    <code>chrome.storage.local</code> on your own device — nothing is transmitted, and no
+    report is sent. If and when delivery is switched on, this policy will be updated first.
+  </p>
+  <p>
+    SecureView no longer has user accounts. The previous version required a sign-in to
+    receive reports; that has been removed, and any authentication tokens left over from it
+    are deleted from local storage when the extension updates.
   </p>
 
   <h2>4. Permissions Used</h2>
@@ -110,14 +115,15 @@
     <li><strong>storage</strong> — to persist browsing data and settings locally.</li>
     <li><strong>alarms</strong> — to flush accumulated time to storage every 60 seconds.</li>
     <li><strong>idle</strong> — to detect when you are inactive (threshold: 60 seconds) so idle time is not counted.</li>
-    <li><strong>host_permissions (&lt;all_urls&gt;)</strong> — required to inject the content script that detects user activity on every page. The content script does not read or transmit page content.</li>
+    <li><strong>content scripts (all sites)</strong> — required to detect user activity on every page so idle time is not counted. The content script reads only the page title and the fact that activity occurred; it does not read or transmit page content.</li>
+    <li><strong>host_permissions</strong> — limited to the single AWS CloudFront endpoint used for AI categorization. SecureView no longer requests access to all URLs.</li>
   </ul>
 
   <h2>5. Your Controls</h2>
   <ul>
     <li><strong>Clear today's data</strong> — the 🗑 button in the popup permanently removes all browsing data for the current day.</li>
     <li><strong>Exclude domains</strong> — add any domain to the Excluded Domains list in Settings. Excluded domains are never tracked or sent for classification. You can also exclude the currently active site instantly using the 🚫 button in the current-page bar; this simultaneously removes all tracking data recorded for that domain today. Tap 🔓 on an excluded site to restore tracking.</li>
-    <li><strong>Toggle AI categorization</strong> — disable the "Always use AI Categorization" setting to prevent any network requests for sites already matched by built-in rules.</li>
+    <li><strong>Toggle AI categorization</strong> — disable the "Force AI Classification" setting to prevent any network requests for sites already matched by built-in rules.</li>
     <li><strong>Debug logging</strong> — logging is enabled by default in beta builds and disabled in production. It can be toggled in Settings and writes only to the local browser console.</li>
     <li><strong>Uninstall</strong> — removing the extension deletes all locally stored data.</li>
   </ul>

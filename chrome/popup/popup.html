@@ -14,7 +14,7 @@
         <a class="logo-link" href="https://secureview.websaleem.com" target="_blank" rel="noopener" title="SecureView">
           <img class="logo" src="../icons/icon.png" alt="SecureView" />
         </a>
-        <span id="user-name">Hi, there</span>
+        <span class="wordmark">SecureView</span>
       </div>
       <div class="header-right">
         <span class="date" id="today-date"></span>
@@ -115,67 +115,28 @@
         <button class="close-btn" id="close-settings">✕</button>
       </div>
       <div class="settings-body">
-        <!-- Profile Section -->
-        <div class="setting-section hidden" style="margin-bottom: 24px;">
-          <div class="setting-section-header" style="margin-bottom: 16px;">
-            <div class="setting-label">Profile Information</div>
-            <div class="setting-desc">Update your account details</div>
+        <!-- Email report preferences -->
+        <div class="setting-section">
+          <div class="setting-section-header">
+            <div class="setting-label">Email Reports</div>
+            <div class="setting-desc">Saved on this device only. Report delivery is not switched on yet — nothing is sent anywhere for now.</div>
           </div>
-          <div class="profile-form">
-            <div class="setting-form-group">
-              <label>Email Address</label>
-              <input type="text" id="profile-email" class="profile-input" disabled style="background: #f1f5f9; color: var(--text-muted); cursor: not-allowed;" />
+          <div class="setting-form-group">
+            <label for="report-email">Email address</label>
+            <input type="email" id="report-email" class="profile-input" placeholder="you@example.com"
+                   spellcheck="false" autocomplete="email" aria-describedby="report-msg" />
+            <div id="report-msg" class="setting-msg" role="status" aria-live="polite"></div>
+          </div>
+          <div class="setting-row" style="align-items: center;">
+            <div class="setting-info">
+              <div class="setting-label">Frequency</div>
+              <div class="setting-desc">How often you want a summary</div>
             </div>
-            <div class="setting-form-group" style="margin-top: 12px;">
-              <label>Full Name</label>
-              <input type="text" id="profile-name" class="profile-input" />
-            </div>
-            <div class="setting-form-group" style="margin-top: 12px;">
-              <label>Account Type</label>
-              <div style="display: flex; gap: 16px; margin-top: 6px; font-size: 13px; color: var(--text-main);">
-                <label style="cursor: pointer;"><input type="radio" name="profileAccountType" value="Adult"> Adult</label>
-                <label style="cursor: pointer;"><input type="radio" name="profileAccountType" value="Child"> Child</label>
-              </div>
-            </div>
-            <div class="setting-form-group hidden" id="profile-parent-group" style="margin-top: 12px;">
-              <label>Parent Name</label>
-              <input type="text" id="profile-parent" class="profile-input" />
-            </div>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
-              <div id="profile-msg" style="font-size: 12px; font-weight: 500;"></div>
-              <button id="profile-save-btn" class="profile-btn">Save Profile</button>
-            </div>
-
-            <!-- Change Password -->
-            <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
-              <div class="setting-label" style="margin-bottom: 8px;">Change Password</div>
-              <div class="setting-form-group">
-                <label>Current Password</label>
-                <input type="password" id="profile-old-pass" class="profile-input" />
-              </div>
-              <div class="setting-form-group" style="margin-top: 8px;">
-                <label>New Password</label>
-                <input type="password" id="profile-new-pass" class="profile-input" />
-              </div>
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
-                <div id="password-msg" style="font-size: 12px; font-weight: 500;"></div>
-                <button id="password-save-btn" class="profile-btn" style="background: var(--text-main);">Update Password</button>
-              </div>
+            <div class="segmented" id="report-freq" role="radiogroup" aria-label="Report frequency">
+              <button class="toggle-btn active" data-freq="daily" role="radio" aria-checked="true">Daily</button>
+              <button class="toggle-btn" data-freq="weekly" role="radio" aria-checked="false">Weekly</button>
             </div>
           </div>
-        </div>
-        <div class="setting-divider hidden"></div>
-
-        <div class="setting-row" style="align-items: center;">
-          <div class="setting-info">
-            <div class="setting-label">Email Report Frequency</div>
-            <div class="setting-desc">How often to receive browsing reports</div>
-          </div>
-          <select id="setting-report-freq" class="profile-input" style="width: auto; padding: 4px 8px;">
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="none">No email</option>
-          </select>
         </div>
         <div class="setting-divider"></div>
 
@@ -192,7 +153,7 @@
         <div class="setting-divider"></div>
         <div class="setting-row">
           <div class="setting-info">
-            <div class="setting-label">Always use AI Classification</div>
+            <div class="setting-label">Force AI Classification</div>
             <div class="setting-desc">Skip rule-based matching and always call AI categorization for every site</div>
           </div>
           <label class="toggle">
@@ -228,7 +189,6 @@
     </div>
   </div>
 
-  <script src="../shared/config.js"></script>
   <script src="../shared/logger.js"></script>
   <script src="../shared/categories.js"></script>
   <script src="popup.js"></script>

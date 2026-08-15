@@ -3,12 +3,15 @@
 // CloudFront distribution, which sits in front of API Gateway.
 //
 // Request flow:
-//   Extension → CloudFront → Lambda@Edge (viewer-request)
-//                          → validates x-origin-token, strips it, injects real x-api-key
+//   Extension → CloudFront → Lambda@Edge (origin-request)
+//                          → signs the request with SigV4 using its own execution
+//                            role, so API Gateway's IAM authorizer accepts it
 //                          → API Gateway → Lambda → Bedrock
 //
-// The real API Gateway key never leaves the Lambda@Edge function — the extension
-// only holds a lightweight shared secret (x-origin-token) scoped per environment.
+// The extension holds no credential of any kind: the signature is added at the
+// edge, where the browser never sees it. An earlier design used a shared
+// x-origin-token that Lambda@Edge swapped for an x-api-key; neither exists any
+// more, so do not add either header here.
 //
 // CloudFront endpoint input:  { "url": "...", "hostname": "...", "title": "..." }
 // CloudFront endpoint output: { "category": "Technology" }
@@ -34,12 +37,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 const MAX_RETRIES      = 2;
 const RETRY_BASE_MS    = 500;  // exponential backoff: 500 ms, 1000 ms
-
-// ─── CloudFront config ────────────────────────────────────────────────────────
-// originToken: shared secret that Lambda@Edge viewer-request validates.
-// Both build channels currently share one token — re-introduce a per-env split
-// here (and update the validator) if you ever rotate one without the other.
-
 
 
 // Returns true if the given URL is still a placeholder and should not be called.
@@ -119,7 +116,10 @@ async function classifyWithCloudFront(url, hostname, title) {
     return null;
   }
 
-  Logger.info(LOG_CAT, `Calling CloudFront for: ${JSON.stringify({ url, hostname, title: title || "" })}`);
+  // Log the hostname only. The full URL and page title are the most sensitive
+  // things this extension handles, and debug logging can be switched on by any
+  // user — the console is not the place for them.
+  Logger.info(LOG_CAT, `Calling CloudFront for: ${hostname}`);
 
   const headers = { "Content-Type": "application/json" };
 
@@ -212,7 +212,6 @@ async function categorizeUrlEnhanced(url, title) {
     return ruleResult;
   }
 
-  Logger.info(LOG_CAT, `categorizeUrlEnhanced: ${url} ${hostname} ${title}`);
   const apiCategory = await classifyWithCloudFront(url, hostname, title);
   if (!apiCategory) return ruleResult;
 

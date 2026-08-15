@@ -10,9 +10,14 @@ from botocore.credentials import Credentials
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# API settings are dynamically extracted from the request origin
+# Lambda@Edge cannot carry environment variables, so anything configurable has
+# to be a constant here and redeployed with the function.
+#
+# /report was removed along with the Cognito login flow; /categorize is the only
+# path this distribution serves.
+KNOWN_API_PATHS = ("/categorize",)
 
-# Error response structure
+
 def error_response(status, message):
     return {
         "status": status,
@@ -24,26 +29,14 @@ def error_response(status, message):
         "body": json.dumps({"error": message}),
     }
 
+
 def lambda_handler(event, context):
-    cf_request  = event["Records"][0]["cf"]["request"]
-    method      = cf_request["method"]
+    cf_request = event["Records"][0]["cf"]["request"]
+    method = cf_request["method"]
     querystring = cf_request.get("querystring", "")
-    
-    # Extract API Gateway host and region from CloudFront origin
-    origin_domain = cf_request.get("origin", {}).get("custom", {}).get("domainName", "")
-    API_HOST = origin_domain if origin_domain else "localhost"
-    API_REGION = origin_domain.split(".")[2] if ".execute-api." in origin_domain else "ap-southeast-2"
+    uri = cf_request["uri"]
 
-    # ── Map environment to URI prefix ──────────────────────────────────────
-    uri = cf_request['uri']
-    
-    # Backward compatibility: map root requests to the prod stage
-    if uri == "/categorize":
-        uri = "/prod/categorize"
-        
-    cf_request["uri"] = uri
-
-    # ── Handle OPTIONS Preflight ───────────────────────────────────────────
+    # ── Handle OPTIONS preflight ───────────────────────────────────────────
     if method == "OPTIONS":
         return {
             "status": "204",
@@ -51,50 +44,69 @@ def lambda_handler(event, context):
             "headers": {
                 "access-control-allow-origin": [{"key": "Access-Control-Allow-Origin", "value": "*"}],
                 "access-control-allow-methods": [{"key": "Access-Control-Allow-Methods", "value": "OPTIONS, POST"}],
-                "access-control-allow-headers": [{"key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization"}],
-            }
+                "access-control-allow-headers": [{"key": "Access-Control-Allow-Headers", "value": "Content-Type"}],
+            },
         }
+
+    if uri not in KNOWN_API_PATHS:
+        logger.warning("Rejected request for unknown path")
+        return error_response("404", "Not Found")
+
+    if method != "POST":
+        return error_response("405", "Method Not Allowed")
+
+    origin_custom = cf_request.get("origin", {}).get("custom", {})
+    api_host = origin_custom.get("domainName", "")
+    if not api_host:
+        logger.error("Origin domainName missing from the CloudFront event")
+        return error_response("502", "Bad Gateway")
+
+    api_region = api_host.split(".")[2] if ".execute-api." in api_host else "ap-southeast-2"
+
+    # CloudFront prepends the origin's OriginPath (e.g. "/live", the API Gateway
+    # stage) to cf_request["uri"] when it forwards to the origin — but it does so
+    # AFTER this function returns. So the SigV4 signature has to cover the
+    # stage-prefixed path while cf_request["uri"] stays un-prefixed.
+    #
+    # Getting this wrong is silent: the request reaches API Gateway with a
+    # signature computed over a different path and comes back 403. Reading the
+    # prefix off the event rather than hardcoding it also means the stage name
+    # can change in the template without this function drifting out of sync —
+    # the previous hardcoded "/prod" did not match the "live" stage at all.
+    origin_path = origin_custom.get("path", "") or ""
+    signed_path = f"{origin_path}{uri}"
 
     # ── Body decoding ──────────────────────────────────────────────────────
     body_obj = cf_request.get("body") or {}
-    raw      = body_obj.get("data", "")
-    body     = base64.b64decode(raw).decode("utf-8") \
-               if raw and body_obj.get("encoding") == "base64" \
-               else (raw or "")
+    raw = body_obj.get("data", "")
+    body = (
+        base64.b64decode(raw).decode("utf-8")
+        if raw and body_obj.get("encoding") == "base64"
+        else (raw or "")
+    )
 
-    # ── Log 1: raw body before parsing ────────────────────────────────────
-    logger.info("[2] Secureview Raw body received: %s", repr(body))
-
-    # ── Parse and validate hostname + title ───────────────────────────────
+    # ── Parse and validate ─────────────────────────────────────────────────
+    # Deliberately no logging of the body, hostname, or title: these are the
+    # user's browsing history, and CloudWatch is not where it belongs.
     try:
         parsed = json.loads(body) if body else {}
-    except json.JSONDecodeError as e:
-        logger.error("[3] Body is not valid JSON: %s | body was: %s", e, repr(body))
-        parsed = {}
-        return error_response("403", "Forbidden - invalid body")
+    except json.JSONDecodeError:
+        logger.error("Request body is not valid JSON")
+        return error_response("400", "Bad Request - invalid body")
+
+    if not isinstance(parsed, dict):
+        return error_response("400", "Bad Request - invalid body")
 
     hostname = parsed.get("hostname")
-    title    = parsed.get("title")
-
-    # ── Log 2: extracted fields ────────────────────────────────────────────
-    logger.info("[3] hostname=%s | title=%s", repr(hostname), repr(title))
-
-    if not hostname:
-        logger.error("[!] hostname is EMPTY — check the caller payload")
-        return error_response("403", "Forbidden - empty hostname")
-    if not title:
-        logger.warning("[!] title is EMPTY — check the caller payload")
+    if not hostname or not isinstance(hostname, str):
+        logger.warning("Request rejected: missing hostname")
+        return error_response("400", "Bad Request - hostname is required")
 
     clean_body = json.dumps(parsed)
-
     cf_request["body"] = {"action": "replace", "encoding": "text", "data": clean_body}
 
-    # ── Extract Content-Type ───────────────────────────────────────────────
-    ct_headers   = cf_request.get("headers", {}).get("content-type", [])
+    ct_headers = cf_request.get("headers", {}).get("content-type", [])
     content_type = ct_headers[0]["value"] if ct_headers else "application/json"
-
-    # ── Log 3: content-type being used ────────────────────────────────────
-    logger.info("[4] Content-Type: %s", content_type)
 
     credentials = Credentials(
         access_key=os.environ["AWS_ACCESS_KEY_ID"],
@@ -102,7 +114,7 @@ def lambda_handler(event, context):
         token=os.environ.get("AWS_SESSION_TOKEN"),
     )
 
-    url = f"https://{API_HOST}{uri}"
+    url = f"https://{api_host}{signed_path}"
     if querystring:
         url = f"{url}?{querystring}"
 
@@ -111,31 +123,24 @@ def lambda_handler(event, context):
         url=url,
         data=clean_body.encode("utf-8"),
         headers={
-            "Host": API_HOST,
+            "Host": api_host,
             "Content-Type": content_type,
         },
     )
 
-    SigV4Auth(credentials, "execute-api", API_REGION).add_auth(aws_request)
+    SigV4Auth(credentials, "execute-api", api_region).add_auth(aws_request)
     signed = dict(aws_request.headers)
 
-    cf_request["headers"]["authorization"] = [{
-        "key": "Authorization", "value": signed["Authorization"],
-    }]
-    cf_request["headers"]["x-amz-date"] = [{
-        "key": "X-Amz-Date", "value": signed["X-Amz-Date"],
-    }]
+    cf_request["headers"]["authorization"] = [{"key": "Authorization", "value": signed["Authorization"]}]
+    cf_request["headers"]["x-amz-date"] = [{"key": "X-Amz-Date", "value": signed["X-Amz-Date"]}]
     if "X-Amz-Security-Token" in signed:
-        cf_request["headers"]["x-amz-security-token"] = [{
-            "key": "X-Amz-Security-Token",
-            "value": signed["X-Amz-Security-Token"],
-        }]
+        cf_request["headers"]["x-amz-security-token"] = [
+            {"key": "X-Amz-Security-Token", "value": signed["X-Amz-Security-Token"]}
+        ]
 
-    cf_request["headers"]["host"]         = [{"key": "Host","value": API_HOST}]
+    cf_request["headers"]["host"] = [{"key": "Host", "value": api_host}]
     cf_request["headers"]["content-type"] = [{"key": "Content-Type", "value": content_type}]
 
-    # ── Log 4: confirm request is being forwarded ──────────────────────────
-    logger.info("[5] Forwarding to %s | uri=%s | method=%s | hostname=%s | title=%s",
-                url, cf_request["uri"], method, repr(hostname), repr(title))
+    logger.info("Forwarding signed request to %s (region %s)", signed_path, api_region)
 
     return cf_request

@@ -135,7 +135,7 @@ body {
 .logo-link { display: flex; align-items: center; line-height: 0; border-radius: var(--r-sm); }
 .logo { width: 22px; height: 22px; object-fit: contain; border-radius: 6px; }
 
-#user-name {
+.wordmark {
   font-size: 13px;
   font-weight: 650;
   color: var(--ink);
@@ -663,6 +663,12 @@ body {
 }
 .profile-btn:hover { background: var(--brand-strong); }
 .profile-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Reserve the line so the row doesn't jump when a save/validation message
+   appears and clears again. */
+.setting-msg { font-size: 11px; font-weight: 600; min-width: 0; min-height: 14px; }
+.setting-msg.is-error { color: var(--red); }
+.setting-msg.is-ok { color: var(--green); }
 
 .exclusion-input-row { display: flex; gap: 7px; }
 .exclusion-input-row input {

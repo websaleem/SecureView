@@ -66,9 +66,51 @@ Resources:
                   - s3:GetObjectVersion
                   - s3:GetBucketAcl
                   - s3:GetBucketLocation
-                Resource: 
+                Resource:
                   - !GetAtt ArtifactsBucket.Arn
                   - !Sub "${ArtifactsBucket.Arn}/*"
+              # buildspec.yml runs `cloudformation deploy`, updates and publishes
+              # the Lambdas, and repoints the CloudFront edge association. None
+              # of that was permitted before — every build command failed with
+              # AccessDenied.
+              - Sid: DeployStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:GetTemplateSummary
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/SecureViewBackend-*/*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:aws:transform/*"
+              # cloudformation deploy creates the IAM roles, Lambdas, API
+              # Gateway, WAF and CloudFront resources declared in the template,
+              # and must be able to hand the execution roles to Lambda.
+              - Sid: ManageStackResources
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:TagRole
+                  - lambda:*
+                  - apigateway:*
+                  - wafv2:*
+                  - cloudfront:*
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                Resource: '*'
 
   CodePipelineServiceRole:
     Type: AWS::IAM::Role

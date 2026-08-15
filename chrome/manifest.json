@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SecureView",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Track active browsing time, get AI-powered site categorization, and visualize your daily web activities - all in one dashboard.",
   "permissions": [
     "tabs",
@@ -9,15 +9,8 @@
     "alarms",
     "idle"
   ],
-  "externally_connectable": {
-    "matches": [
-      "*://*.websaleem.com/*",
-      "*://localhost/*",
-      "*://127.0.0.1/*"
-    ]
-  },
   "host_permissions": [
-    "<all_urls>"
+    "https://d1pjkjoqck0lva.cloudfront.net/*"
   ],
   "background": {
     "service_worker": "background/background.js"

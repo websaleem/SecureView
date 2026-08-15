@@ -29,9 +29,7 @@ jobs:
       - name: Build zip
         env:
           CHANNEL: ${{ github.ref_name == 'main' && 'production' || 'beta' }}
-          PROD_COGNITO_CLIENT_ID: ${{ secrets.PROD_COGNITO_CLIENT_ID }}
-          PROD_COGNITO_DOMAIN:    ${{ secrets.PROD_COGNITO_DOMAIN }}
-          PROD_CLOUDFRONT_URL:    ${{ secrets.PROD_CLOUDFRONT_URL }}
+          PROD_CLOUDFRONT_URL: ${{ secrets.PROD_CLOUDFRONT_URL }}
         run: ./scripts/build-zip.sh
 
       - name: Upload + publish to Chrome Web Store

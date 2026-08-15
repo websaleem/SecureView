@@ -293,14 +293,30 @@ function categorizeUrl(url) {
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase().replace(/^www\./, "");
-    const fullPath = hostname + urlObj.pathname;
+    const pathname = urlObj.pathname.toLowerCase();
 
-    // Exact domain (and subdomain / path-prefix) matches
+    // Domain and subdomain matches, including the path-scoped entries in the
+    // rule set ("google.com/travel", "linkedin.com/jobs", "youtube.com/gaming").
+    //
+    // This used to be a `(hostname + pathname).startsWith(domain)` test, which
+    // matched any hostname merely *beginning* with a known domain — so the
+    // lookalike "amazon.com.attacker.net" was categorised as the real
+    // amazon.com. Matching the host component and the path separately keeps the
+    // path rules working without treating a prefix as an identity.
     for (const category of CATEGORY_RULES) {
       for (const domain of category.domains) {
-        if (hostname === domain || hostname.endsWith("." + domain) || fullPath.startsWith(domain)) {
-          return { name: category.name, icon: category.icon, color: category.color };
-        }
+        const slash = domain.indexOf("/");
+        const ruleHost = slash === -1 ? domain : domain.slice(0, slash);
+        const rulePath = slash === -1 ? "" : domain.slice(slash);
+
+        const hostMatches = hostname === ruleHost || hostname.endsWith("." + ruleHost);
+        if (!hostMatches) continue;
+
+        // A path rule matches on whole segments only, so "/gaming" does not
+        // match "/gamingfoo".
+        if (rulePath && !(pathname === rulePath || pathname.startsWith(rulePath + "/"))) continue;
+
+        return { name: category.name, icon: category.icon, color: category.color };
       }
     }
 
