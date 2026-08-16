@@ -84,11 +84,19 @@ if [[ "$CHANNEL" == "beta" ]]; then
     replaceInDir("build/beta");
   '
 elif [[ "$CHANNEL" == "production" ]]; then
-  # Point the production build at the production CloudFront distribution.
+  # Point the production build at the production endpoint.
   #
   # config.js and manifest.json must BOTH be rewritten: the service worker's
   # fetch is blocked unless host_permissions covers the host it calls, so
   # swapping only the config silently breaks categorisation in the prod build.
+  #
+  # Defaults to the prod alias rather than falling back to the dev endpoint —
+  # a production zip quietly pointing at dev is a worse failure than a loud one.
+  # The alias is stable across distribution changes, unlike a *.cloudfront.net
+  # domain, so it is the right thing to bake in.
+  # Exported, not just assigned: the rewrite below reads it via node's
+  # process.env, which only sees exported variables.
+  export PROD_CLOUDFRONT_URL="${PROD_CLOUDFRONT_URL:-https://secureview.websaleem.com}"
   if [[ -n "${PROD_CLOUDFRONT_URL:-}" ]]; then
     node -e '
       const fs = require("fs");

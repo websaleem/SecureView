@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SecureView edge + CDN — Lambda@Edge request signer, WAF rate limit, and the
+  CloudFront distribution serving both the site and the categorization API.
+  MUST be deployed to us-east-1.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# us-east-1 is mandatory here: Lambda@Edge functions and CLOUDFRONT-scoped
+# WebACLs exist only in that region. The previous templates declared the edge
+# function in ap-southeast-2, which CloudFront can never attach — which is why
+# the working edge functions had been created by hand outside CloudFormation.
+#
+# Request path:
+#   extension → CloudFront (WAF) → /categorize behaviour → Lambda@Edge
+#             → SigV4-signs with its own role → API Gateway (AWS_IAM)
+#             → classifier Lambda → Bedrock
+#
+# Three things here are load-bearing and were each broken in the old setup:
+#   1. CacheBehaviors ORDER — CloudFront takes the first matching pattern, so
+#      /categorize must precede the `*` site catch-all. A `*` that allowed only
+#      GET/HEAD was shadowing the API and returning 403 to every POST.
+#   2. IncludeBody: true — the signer reads request.body; without it the body
+#      never arrives and the function rejects its own traffic.
+#   3. OriginPath = /<stage> — CloudFront prepends this AFTER the function runs,
+#      so the function signs OriginPath + uri. Empty OriginPath meant requests
+#      reached API Gateway with no stage prefix.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket IN us-east-1 holding the packaged edge Lambda zip
+
+  EdgeArtifactKey:
+    Type: String
+    Description: >-
+      S3 key of the edge zip, content-hashed by the deploy script. The hash is
+      what makes CloudFormation publish a new Lambda version and repoint
+      CloudFront at it — the step that was previously missing, leaving live
+      traffic on stale edge code.
+
+  ApiDomainName:
+    Type: String
+    Description: From the api stack's ApiDomainName output
+
+  ApiStageName:
+    Type: String
+    Default: live
+
+  SiteBucketRegionalDomainName:
+    Type: String
+    Description: e.g. dev.secureview.websaleem.com.s3.ap-southeast-2.amazonaws.com
+
+  OriginAccessControlId:
+    Type: String
+    Description: Existing CloudFront OAC for the site bucket
+
+  AcmCertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM cert in us-east-1 covering DistributionAlias. Required only when DistributionAlias is set.
+
+  DistributionAlias:
+    Type: String
+    Default: ''
+    Description: >-
+      e.g. dev.secureview.websaleem.com. Leave EMPTY for the initial build-out:
+      CloudFront refuses an alias already claimed by another distribution, and
+      the old distributions still hold both names. Deploying without it creates
+      the stack on its *.cloudfront.net domain so the new stack can be verified
+      while the existing site keeps serving. Set it at cutover, after the alias
+      has been released from the old distribution.
+
+  ManageDistribution:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      'true'  — this stack owns the CloudFront distribution (the clean end state).
+      'false' — create only the edge signer, its version, and the WAF, and leave
+                the distribution to be wired by scripts/attach-api-behaviour.py.
+                Use this to adopt an EXISTING distribution without moving its
+                alias: prod's distribution already holds secureview.websaleem.com
+                and its certificate, so recreating it would mean a DNS cutover
+                and an apex cert the wildcard does not cover.
+
+  CreateWebACL:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create a rate-limiting WebACL. Independent of ManageDistribution, because
+      an adopted distribution still needs protecting: when adopting, the ACL is
+      attached by scripts/attach-api-behaviour.py --web-acl-arn.
+      Set 'false' only where the distribution already carries a better ACL —
+      prod's CloudFront-managed one adds IP reputation, common rule set and
+      known-bad-inputs on top of a rate limit, and replacing it would be a
+      downgrade.
+
+  RateLimitPer5Min:
+    Type: Number
+    Default: 300
+    Description: >-
+      WAF requests per 5 minutes per IP. /categorize is unauthenticated, so this
+      is the only thing bounding Bedrock spend if the endpoint is discovered.
+      A normal user makes a handful of calls an hour — results are cached in the
+      extension for 30 days.
+
+Conditions:
+  # Without an alias the distribution has to fall back to the default
+  # *.cloudfront.net certificate — ACM certs may only be attached alongside the
+  # aliases they cover.
+  HasAlias: !Not [!Equals [!Ref DistributionAlias, '']]
+  CreateDistribution: !Equals [!Ref ManageDistribution, 'true']
+  ShouldCreateWebACL: !Equals [!Ref CreateWebACL, 'true']
+
+Resources:
+  # ───────── WAF (CLOUDFRONT scope — us-east-1 only) ─────────
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Condition: ShouldCreateWebACL
+    Properties:
+      Name: !Sub "secureview-${Environment}"
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "secureview${Environment}"
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: RateLimitByIP
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitPer5Min
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "secureview${Environment}RateLimit"
+            SampledRequestsEnabled: true
+
+  # ───────── Lambda@Edge ─────────
+  EdgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com, edgelambda.amazonaws.com]
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SecureViewEdgePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Edge functions log into the region nearest the viewer, so the
+              # log-group ARN cannot be pinned to one region.
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/*.secureview-edge-${Environment}:*"
+              # Signing uses the role's own credentials — this is what lets the
+              # extension hold no secret at all.
+              - Sid: InvokeApi
+                Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/POST/categorize"
+
+  EdgeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "secureview-edge-${Environment}"
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt EdgeRole.Arn
+      # Lambda@Edge limits: origin-request is capped at 30s and 10GB, but the
+      # signing work is trivial. No environment variables — Lambda@Edge forbids
+      # them, which is why the function derives everything from the event.
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref EdgeArtifactKey
+
+  # CloudFront can only associate a numbered version, never $LATEST or an alias.
+  # Because the artifact key carries a content hash, a code change replaces this
+  # resource, and the distribution below picks up the new version in the same
+  # deploy. That closes the drift the old manual process suffered from.
+  EdgeVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref EdgeFunction
+      Description: !Sub "Signer for ${EdgeArtifactKey}"
+
+  # ───────── CloudFront ─────────
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: CreateDistribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "SecureView ${Environment}"
+        Aliases: !If [HasAlias, [!Ref DistributionAlias], !Ref 'AWS::NoValue']
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        # CloudFormation spells this IPV6Enabled; IsIPV6Enabled is the
+        # CloudFront API's name for the same field and is rejected here.
+        IPV6Enabled: true
+        PriceClass: PriceClass_All
+        WebACLId: !If [ShouldCreateWebACL, !GetAtt WebACL.Arn, !Ref 'AWS::NoValue']
+        ViewerCertificate: !If
+          - HasAlias
+          - AcmCertificateArn: !Ref AcmCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+
+        Origins:
+          - Id: SiteS3Origin
+            DomainName: !Ref SiteBucketRegionalDomainName
+            OriginAccessControlId: !Ref OriginAccessControlId
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+
+          - Id: ApiOrigin
+            DomainName: !Ref ApiDomainName
+            OriginPath: !Sub "/${ApiStageName}"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginSSLProtocols: [TLSv1.2]
+
+        # ORDER IS THE FIX. Swapping these two re-breaks categorization.
+        CacheBehaviors:
+          - PathPattern: /categorize
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            # Managed-CachingDisabled
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            # Managed-AllViewerExceptHostHeader — forwards the body, but lets
+            # the signer set Host itself, which SigV4 requires.
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref EdgeVersion
+                IncludeBody: true
+
+          - PathPattern: '*'
+            TargetOriginId: SiteS3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            # Managed-CachingOptimized
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+        # Unreachable while `*` exists, but required. Pointed at the site so a
+        # future removal of the catch-all fails closed rather than exposing the
+        # API on every path.
+        DefaultCacheBehavior:
+          TargetOriginId: SiteS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+Outputs:
+  DistributionId:
+    Condition: CreateDistribution
+    Value: !Ref Distribution
+  DistributionDomainName:
+    Condition: CreateDistribution
+    Value: !GetAtt Distribution.DomainName
+  EdgeVersionArn:
+    Description: Feed to scripts/attach-api-behaviour.py when adopting an existing distribution
+    Value: !Ref EdgeVersion
+  WebACLArn:
+    Condition: ShouldCreateWebACL
+    Description: Pass to attach-api-behaviour.py --web-acl-arn when adopting a distribution
+    Value: !GetAtt WebACL.Arn
+  CategorizeEndpoint:
+    Condition: CreateDistribution
+    Description: Set as _CF_HOST in chrome/shared/config.js and in manifest host_permissions
+    Value: !If
+      - HasAlias
+      - !Sub "https://${DistributionAlias}"
+      - !Sub "https://${Distribution.DomainName}"

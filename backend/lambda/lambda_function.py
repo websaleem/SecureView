@@ -36,17 +36,13 @@ def lambda_handler(event, context):
     querystring = cf_request.get("querystring", "")
     uri = cf_request["uri"]
 
-    # ── Handle OPTIONS preflight ───────────────────────────────────────────
-    if method == "OPTIONS":
-        return {
-            "status": "204",
-            "statusDescription": "No Content",
-            "headers": {
-                "access-control-allow-origin": [{"key": "Access-Control-Allow-Origin", "value": "*"}],
-                "access-control-allow-methods": [{"key": "Access-Control-Allow-Methods", "value": "OPTIONS, POST"}],
-                "access-control-allow-headers": [{"key": "Access-Control-Allow-Headers", "value": "Content-Type"}],
-            },
-        }
+    # No CORS preflight handler, and no Access-Control-Allow-Origin anywhere.
+    #
+    # The extension calls this from an MV3 service worker holding
+    # host_permissions for the host, which is not subject to CORS. Answering
+    # preflights with "*" only ever served web pages — letting any site invoke
+    # the classifier through its visitors' browsers, which also sidesteps the
+    # WAF's per-IP rate limit. OPTIONS now falls through to the 405 below.
 
     if uri not in KNOWN_API_PATHS:
         logger.warning("Rejected request for unknown path")

@@ -1,4 +1,4 @@
-***REMOVED***
+# SecureView
 
 ## Overview
 
@@ -70,11 +70,9 @@ Required GitHub Actions secrets (Settings → Secrets and variables → Actions)
 | `CWS_REFRESH_TOKEN` | both | OAuth refresh token (long-lived) |
 | `CWS_EXTENSION_ID` | production | id of the production listing |
 | `CWS_EXTENSION_ID_BETA` | beta | id of the separate beta listing |
-| `MAIL_USERNAME` | both (notify) | sender Gmail address (e.g. `you@gmail.com`) |
-| `MAIL_APP_PASSWORD` | both (notify) | Google **App Password** (16 chars), not your account password |
-| `MAIL_TO` | both (notify) | recipient address for deployment notifications |
+| `PROD_CLOUDFRONT_URL` | production | optional; defaults to `https://secureview.websaleem.com` |
 
-The first three CWS values are tied to your Google account and shared across channels; the extension ids differ because the two listings are independent items in the store. The mail secrets feed a `notify` job at the end of each workflow that emails the result (success or failure) with a link to the run.
+The first three CWS values are tied to your Google account and shared across channels; the extension ids differ because the two listings are independent items in the store.
 
 #### Generating client_id, client_secret, refresh_token
 
@@ -90,23 +88,31 @@ The first three CWS values are tied to your Google account and shared across cha
    - In **Step 1**, scroll down to "Input your own scopes" and paste exactly: `https://www.googleapis.com/auth/chromewebstore`
    - Click **Authorize APIs**. Sign in with the Google account that owns the Chrome Web Store listings and grant consent.
    - In **Step 2**, click **Exchange authorization code for tokens**. The `Refresh token` displayed is your `CWS_REFRESH_TOKEN`.
+
 5. Copy the extension ids from the Chrome Web Store dashboard (URL: `https://chrome.google.com/webstore/devconsole/<account>/<extension-id>`) and put them in `CWS_EXTENSION_ID` (production) and `CWS_EXTENSION_ID_BETA`.
 
 If `auto-publish` ever fails with `ITEM_PENDING_REVIEW` or similar, the upload still landed — you can finish the publish manually from the developer dashboard.
 
-#### Generating the Gmail App Password (for deployment notifications)
+<details>
+<summary>Alternative: get the refresh token without the Playground</summary>
 
-Gmail no longer accepts plain account passwords for SMTP — you need an App Password (16-character one-time string scoped to a single use).
+Create the OAuth client as a **Desktop app** instead of a Web application, then
+authorise it directly. Open this URL in a browser signed in as the account that
+owns the listings:
 
-1. Make sure 2-Step Verification is on for the Google account: <https://myaccount.google.com/security> → **2-Step Verification** → enable.
-2. Go to <https://myaccount.google.com/apppasswords>.
-3. **App name** → enter `SecureView CI` (any label is fine) → **Create**.
-4. Copy the 16-character password Google shows (with or without spaces — both work). It's only shown once.
-5. Paste into the GitHub secret `MAIL_APP_PASSWORD`. Set `MAIL_USERNAME` to the same Gmail address you generated it from, and `MAIL_TO` to whichever address should receive the alerts (often the same one).
+```text
+https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=YOUR_CLIENT_ID&redirect_uri=urn:ietf:wg:oauth:2.0:oob
+```
 
-If the Gmail account doesn't have 2-Step Verification, the **App passwords** page won't appear at all. Enable 2SV first.
+Approve, copy the authorization code it shows, and exchange it:
 
-The notify job runs `if: always()` after the publish step, so you'll get a "success" email when a release ships and a "failed" email when something breaks. The subject line carries the channel and outcome, e.g. `[SecureView · production · success] v1.0.5` — easy to filter in your inbox.
+```bash
+curl "https://accounts.google.com/o/oauth2/token" -d "client_id=YOUR_CLIENT_ID&client_secret=YOUR_CLIENT_SECRET&code=YOUR_AUTHORIZATION_CODE&grant_type=authorization_code&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
+```
+
+The `refresh_token` in the JSON response is `CWS_REFRESH_TOKEN`.
+
+</details>
 
 ## Architecture
 
@@ -202,7 +208,45 @@ The extension has four runtime components that communicate via Chrome APIs:
 
 **`shared/categorizer.js`** — Imported by `background.js` via `importScripts`. Provides `categorizeUrlEnhanced(url, title)`, an async drop-in for `categorizeUrl()`. Rule-based first; for "Other" domains it calls a CloudFront distribution. Flow: `CloudFront (WAF) → Lambda@Edge (origin-request signs request) → API Gateway → Lambda → Bedrock`. Before the request leaves the device, `_safeUrlForApi(url)` strips the query string and fragment so only `protocol://host/path` is sent — query params and hashes are where session tokens, search terms, and PII tend to sit. Retries up to 2× with exponential backoff to handle Lambda@Edge cold starts. Results cached under `br_cat_cache`. Fails silently if unreachable.
 
-AWS setup required (per env): AWS WAF rate limit rule; CloudFront distribution pointing to API Gateway as origin; Lambda@Edge origin-request function that signs the request with AWS IAM; API Gateway with IAM authorization; Lambda function that calls Amazon Bedrock for classification.
+### Backend deployment
+
+The backend is **two CloudFormation stacks per environment**. The split is forced
+by AWS, not preference: Lambda@Edge functions and `CLOUDFRONT`-scoped WAF WebACLs
+exist only in `us-east-1`, and CloudFormation cannot import values across regions.
+
+| Stack | Region | Contents |
+|---|---|---|
+| `secureview-api-<env>` | ap-southeast-2 | Classifier Lambda, API Gateway (`AWS_IAM`), stage, log group |
+| `secureview-edge-cdn-<env>` | us-east-1 | Lambda@Edge signer, WAF rate limit, CloudFront distribution |
+
+Deploy either environment with one command — it packages both Lambdas, deploys
+both stacks in order, and feeds the API stack's outputs into the CDN stack:
+
+```bash
+./scripts/deploy-backend.sh dev
+```
+
+Lambda code is uploaded under a **content-hashed S3 key**. A code change changes
+the key, which replaces the `Lambda::Version`, which repoints the CloudFront
+association — all in one deploy. This is deliberate: the previous process ran
+`update-function-code` alone, which never reached live traffic because the
+distribution stayed pinned to an older version.
+
+Three settings in `secureview-edge-cdn.yml` are load-bearing, and each was broken
+in the setup this replaced:
+
+1. **`CacheBehaviors` order** — CloudFront takes the first matching pattern, so
+   `/categorize` must precede the `*` site catch-all. A `*` behaviour allowing
+   only GET/HEAD was shadowing the API and returning 403 to every POST.
+2. **`IncludeBody: true`** — the signer reads `request.body`; without it the body
+   never arrives and the function rejects its own traffic.
+3. **`OriginPath: /<stage>`** — CloudFront prepends this *after* the function
+   runs, so the function signs `OriginPath + uri`. Both are derived from the
+   event, so template and code cannot drift.
+
+`scripts/teardown-legacy.sh` (dry-run by default) removes the superseded stacks
+and the hand-made resources they drifted away from. Every target is named
+explicitly, since the account hosts unrelated projects.
 
 ### Runtime Settings Flags
 

@@ -263,6 +263,22 @@ const CATEGORY_RULES = [
       "att.com", "verizon.com", "t-mobile.com", "sprint.com", "comcast.com", "xfinity.com"
     ],
     keywords: ["telecom", "mobile", "broadband", "internet", "wireless", "cellular", "optus", "telstra", "vodafone"]
+  },
+  {
+    name: "Utilities & Energy",
+    icon: "🔌",
+    color: "#F1C40F",
+    domains: [
+      "agl.com.au", "originenergy.com.au", "energyaustralia.com.au", "redenergy.com.au",
+      "alintaenergy.com.au", "simplyenergy.com.au", "momentumenergy.com.au",
+      "sydneywater.com.au", "ausgrid.com.au",
+      "duke-energy.com", "pge.com", "coned.com", "nationalgrid.com",
+      "britishgas.co.uk", "octopus.energy", "eonenergy.com"
+    ],
+    // "gas" and "power" are deliberately absent: hostnameMatchesKeyword treats a
+    // match at the start of the hostname as a boundary hit, so "gas" would also
+    // claim gasparilla.com and "power" would claim powerpoint-style names.
+    keywords: ["energy", "utilities", "electricity", "solarpower"]
   }
 ];
 

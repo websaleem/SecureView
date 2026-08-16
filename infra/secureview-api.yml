@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SecureView categorization API — Bedrock classifier Lambda behind API Gateway.
+  Deploy to ap-southeast-2. Pairs with infra/secureview-edge-cdn.yml (us-east-1).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# This is half of a two-stack backend. The split is forced by AWS, not taste:
+#
+#   this stack  (ap-southeast-2) : classifier Lambda + API Gateway + Bedrock
+#   edge-cdn    (us-east-1)      : Lambda@Edge, WAF (CLOUDFRONT scope), CloudFront
+#
+# Lambda@Edge functions and CLOUDFRONT-scoped WebACLs only exist in us-east-1,
+# and CloudFormation cannot import values across regions — so the edge stack
+# takes this stack's outputs as parameters. scripts/deploy-backend.sh wires them.
+#
+# Both environments are identical apart from names. The previous setup had dev
+# in ap-southeast-2 and prod in ap-southeast-4 with a differently-named API,
+# which is why prod and dev behaved differently and neither matched the repo.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket (this region) holding the packaged Lambda zip
+
+  ClassifierArtifactKey:
+    Type: String
+    Description: >-
+      S3 key of the classifier zip, content-hashed by the deploy script
+      (e.g. classifier/9f2c1b….zip). The hash in the key is what makes
+      CloudFormation notice a code change.
+
+  ApiStageName:
+    Type: String
+    Default: live
+
+  BedrockModelId:
+    Type: String
+    Default: apac.amazon.nova-pro-v1:0
+    Description: >-
+      Nova Pro cannot be invoked by bare model id outside the US regions; the
+      APAC cross-region inference profile is the supported entry point.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+  ThrottleRateLimit:
+    Type: Number
+    Default: 5
+  ThrottleBurstLimit:
+    Type: Number
+    Default: 10
+
+Resources:
+  # ───────── Classifier Lambda ─────────
+  ClassifierRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SecureViewClassifierPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/secureview-classifier-${Environment}:*"
+              - Sid: Bedrock
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                # Scoped to the one profile this function uses, plus the
+                # foundation models the profile fans out to across the APAC
+                # regions (hence the wildcard region on the second entry).
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - !Sub "arn:aws:bedrock:*::foundation-model/${BedrockModelId}"
+                  - "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0"
+
+  # Declared explicitly so retention is bounded. Left implicit, Lambda creates
+  # the group on first invoke with retention set to "never expire", and this is
+  # the log group on the path that sees browsing hostnames.
+  ClassifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/secureview-classifier-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ClassifierFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ClassifierLogGroup
+    Properties:
+      FunctionName: !Sub "secureview-classifier-${Environment}"
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt ClassifierRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ClassifierArtifactKey
+      Environment:
+        Variables:
+          BEDROCK_REGION: !Ref AWS::Region
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+
+  # ───────── API Gateway ─────────
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "secureview-api-${Environment}"
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  CategorizeResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: categorize
+
+  # AWS_IAM: the only caller is Lambda@Edge, which signs with SigV4 using its
+  # own execution role. The extension holds no credential.
+  CategorizeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref CategorizeResource
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ClassifierFunction.Arn}/invocations"
+
+  ClassifierInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ClassifierFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/categorize"
+
+  # The deployment is keyed to the artifact so a code or route change produces a
+  # fresh deployment instead of silently serving the old one.
+  Deployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [CategorizeMethod]
+    Properties:
+      RestApiId: !Ref Api
+      Description: !Sub "Deployment for ${ClassifierArtifactKey}"
+
+  Stage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref Api
+      DeploymentId: !Ref Deployment
+      StageName: !Ref ApiStageName
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingRateLimit: !Ref ThrottleRateLimit
+          ThrottlingBurstLimit: !Ref ThrottleBurstLimit
+
+Outputs:
+  ApiId:
+    Value: !Ref Api
+  ApiDomainName:
+    Description: Feed to the edge-cdn stack as ApiDomainName
+    Value: !Sub "${Api}.execute-api.${AWS::Region}.amazonaws.com"
+  ApiStageName:
+    Value: !Ref ApiStageName
+  ClassifierFunctionName:
+    Value: !Ref ClassifierFunction

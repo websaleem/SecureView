@@ -151,7 +151,6 @@ body {
   letter-spacing: -0.02em;
 }
 .title:hover { color: var(--brand-strong); }
-#header-version { font-size: 9px; font-weight: 600; color: var(--ink-3); }
 
 .header-right { display: flex; align-items: center; gap: 2px; }
 
@@ -652,17 +651,6 @@ body {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-tint);
 }
-
-.profile-btn {
-  padding: 7px 14px;
-  background: var(--brand); color: #fff;
-  border: none; border-radius: var(--r-sm);
-  font-family: inherit; font-size: 12px; font-weight: 650;
-  cursor: pointer;
-  transition: background 0.15s ease, opacity 0.15s ease;
-}
-.profile-btn:hover { background: var(--brand-strong); }
-.profile-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* Reserve the line so the row doesn't jump when a save/validation message
    appears and clears again. */

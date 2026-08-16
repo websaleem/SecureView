@@ -138,10 +138,20 @@ async function classifyWithCloudFront(url, hostname, title) {
     const data     = await response.json();
     const category = (data.category || "").trim();
 
-    if (category) {
+    // "Other" is the backend's "I don't know", not an answer. Caching it pinned
+    // the domain for the full 30-day TTL — and because the API is only called
+    // when the local rules already said "Other", the cached non-answer then
+    // short-circuited every later attempt, including after a new category was
+    // added for exactly that site. Return it, but don't remember it.
+    if (category && category !== "Other") {
       Logger.info(LOG_CAT, `Classified: ${hostname} → ${category}`);
       await setCachedCategory(hostname, category);
       return category;
+    }
+
+    if (category === "Other") {
+      Logger.info(LOG_CAT, `Backend returned Other for ${hostname} — not cached, will retry later`);
+      return null;
     }
 
     Logger.warn(LOG_CAT, `Empty category returned for: ${hostname}`);
@@ -181,6 +191,7 @@ function getIconForCategory(categoryName) {
     { keywords: ["automotive", "car", "vehicle", "truck", "motorcycle", "transport"],                                     icon: "🚗", color: "#546E7A" },
     { keywords: ["nature", "environment", "climate", "animal", "wildlife", "outdoor"],                                    icon: "🌿", color: "#43A047" },
     { keywords: ["religion", "spiritual", "church", "faith", "prayer"],                                                   icon: "🙏", color: "#8D6E63" },
+    { keywords: ["utilit", "energy", "electric", "solar", "gas", "water", "power grid"],                                   icon: "🔌", color: "#F1C40F" },
     { keywords: ["adult", "18+", "explicit"],                                                                              icon: "🔞", color: "#B71C1C" },
   ];
 

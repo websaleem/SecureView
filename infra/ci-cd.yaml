@@ -73,7 +73,9 @@ Resources:
               # the Lambdas, and repoints the CloudFront edge association. None
               # of that was permitted before — every build command failed with
               # AccessDenied.
-              - Sid: DeployStack
+              # The backend is two stacks in two regions, so these cannot be
+              # pinned to ${AWS::Region}: the edge/CDN stack is always us-east-1.
+              - Sid: DeployStacks
                 Effect: Allow
                 Action:
                   - cloudformation:CreateChangeSet
@@ -84,12 +86,46 @@ Resources:
                   - cloudformation:DescribeStackEvents
                   - cloudformation:GetTemplateSummary
                 Resource:
-                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/SecureViewBackend-*/*"
-                  - !Sub "arn:aws:cloudformation:${AWS::Region}:aws:transform/*"
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/secureview-api-*/*"
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/secureview-edge-cdn-*/*"
+                  - "arn:aws:cloudformation:*:aws:transform/*"
+              # Lambda artifacts. The deploy script creates these buckets on
+              # first run and uploads content-hashed zips.
+              - Sid: LambdaArtifacts
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::secureview-artifacts-${AWS::AccountId}-*"
+                  - !Sub "arn:aws:s3:::secureview-artifacts-${AWS::AccountId}-*/*"
               # cloudformation deploy creates the IAM roles, Lambdas, API
               # Gateway, WAF and CloudFront resources declared in the template,
               # and must be able to hand the execution roles to Lambda.
-              - Sid: ManageStackResources
+              # Scoped to secureview-* resources. This account also hosts
+              # SecureBin, ShopShare, FloraSense, SkillView and Quizzee; a
+              # wildcard here would let a compromised build reach all of them.
+              - Sid: ManageLambdas
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:PublishVersion
+                  - lambda:ListVersionsByFunction
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                Resource:
+                  - !Sub "arn:aws:lambda:*:${AWS::AccountId}:function:secureview-*"
+              - Sid: ManageRoles
                 Effect: Allow
                 Action:
                   - iam:CreateRole
@@ -102,14 +138,48 @@ Resources:
                   - iam:DeleteRolePolicy
                   - iam:GetRolePolicy
                   - iam:TagRole
-                  - lambda:*
-                  - apigateway:*
-                  - wafv2:*
-                  - cloudfront:*
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/secureview-*"
+              - Sid: ManageLogGroups
+                Effect: Allow
+                Action:
                   - logs:CreateLogGroup
                   - logs:DeleteLogGroup
-                  - logs:DescribeLogGroups
                   - logs:PutRetentionPolicy
+                  - logs:TagResource
+                Resource:
+                  - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/secureview-*"
+              # API Gateway, CloudFront and WAFv2 either do not support
+              # resource-level permissions for the create/list calls
+              # CloudFormation makes, or address resources by opaque generated
+              # id that cannot be predicted in a policy. Kept separate and
+              # explicit rather than hidden inside a blanket wildcard.
+              - Sid: ManageApiCdnWaf
+                Effect: Allow
+                Action:
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:PATCH
+                  - apigateway:DELETE
+                  - cloudfront:CreateDistribution
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListDistributions
+                  - cloudfront:TagResource
+                  - wafv2:CreateWebACL
+                  - wafv2:UpdateWebACL
+                  - wafv2:DeleteWebACL
+                  - wafv2:GetWebACL
+                  - wafv2:ListWebACLs
+                  - wafv2:AssociateWebACL
+                  - wafv2:TagResource
+                Resource: '*'
+              - Sid: DescribeLogGroups
+                Effect: Allow
+                Action: logs:DescribeLogGroups
                 Resource: '*'
 
   CodePipelineServiceRole:

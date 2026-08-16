@@ -86,7 +86,9 @@ async function loadTodayData() {
 async function loadAllKeys() {
   return new Promise((resolve) => {
     chrome.storage.local.get(null, (items) => {
-      const keys = Object.keys(items).filter((k) => k.startsWith("data_")).sort().reverse();
+      // Same strict pattern the background uses when pruning. `startsWith`
+      // would also admit a malformed key, which then renders as "Invalid Date".
+      const keys = Object.keys(items).filter((k) => /^data_\d{4}_\d{2}_\d{2}$/.test(k)).sort().reverse();
       resolve(keys.map((k) => ({ key: k, data: items[k] })));
     });
   });

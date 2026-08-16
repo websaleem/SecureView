@@ -1,10 +1,10 @@
 version: 0.2
 
-# Lambda@Edge lives in us-east-1 regardless of where the rest of the stack runs;
-# CloudFront will not accept an association with a function in any other region.
-env:
-  variables:
-    EDGE_REGION: us-east-1
+# The backend deploy is one script so that CI and a laptop do exactly the same
+# thing. scripts/deploy-backend.sh packages both Lambdas under content-hashed S3
+# keys and deploys the two stacks — secureview-api-<env> in ap-southeast-2 and
+# secureview-edge-cdn-<env> in us-east-1 (Lambda@Edge and CLOUDFRONT-scope WAF
+# exist only there).
 
 phases:
   install:
@@ -13,59 +13,17 @@ phases:
 
   pre_build:
     commands:
-      - echo "Starting backend deployment..."
       - pip install --quiet boto3
+      - aws --version
 
   build:
     commands:
-      # Determine environment from branch name
+      # main -> prod, everything else -> dev
       - BRANCH_NAME=$(echo $CODEBUILD_WEBHOOK_HEAD_REF | sed 's/refs\/heads\///')
       - if [ "$BRANCH_NAME" = "main" ]; then ENV="prod"; else ENV="dev"; fi
-      - echo "Deploying to $ENV environment..."
-
-      - echo "Deploying CloudFormation stack..."
-      - |
-        aws cloudformation deploy \
-          --template-file infra/secureview-backend.yml \
-          --stack-name SecureViewBackend-$ENV \
-          --parameter-overrides Environment=$ENV \
-          --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-          --no-fail-on-empty-changeset
-
-      - echo "Zipping and deploying Bedrock Categorization Lambda..."
-      - (cd backend/lambda/bedrock && zip -qr ../bedrock.zip .)
-      - aws lambda update-function-code --function-name svCategorizeURL-$ENV --zip-file fileb://backend/lambda/bedrock.zip
-
-      # The edge function needs a PUBLISHED version, and CloudFront has to be
-      # repointed at it. Without this the distribution stays pinned to whatever
-      # version it was created with and edge code changes never take effect —
-      # update-function-code alone silently does nothing to live traffic.
-      - echo "Publishing Edge Lambda and repointing CloudFront..."
-      - (cd backend/lambda && zip -qr edge.zip lambda_function.py)
-      - |
-        aws lambda update-function-code \
-          --region $EDGE_REGION \
-          --function-name svSignedCategorizeRequest-$ENV \
-          --zip-file fileb://backend/lambda/edge.zip
-      - |
-        aws lambda wait function-updated \
-          --region $EDGE_REGION \
-          --function-name svSignedCategorizeRequest-$ENV
-      - |
-        EDGE_VERSION_ARN=$(aws lambda publish-version \
-          --region $EDGE_REGION \
-          --function-name svSignedCategorizeRequest-$ENV \
-          --query 'FunctionArn' --output text)
-        echo "Published $EDGE_VERSION_ARN"
-        DIST_ID=$(aws cloudformation describe-stacks \
-          --stack-name SecureViewBackend-$ENV \
-          --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" \
-          --output text \
-          | xargs -I {} aws cloudfront list-distributions \
-              --query "DistributionList.Items[?DomainName=='{}'].Id | [0]" --output text)
-        echo "Updating distribution $DIST_ID"
-        python3 scripts/update_edge_association.py "$DIST_ID" "$EDGE_VERSION_ARN"
+      - echo "Deploying SecureView backend to $ENV"
+      - ./scripts/deploy-backend.sh "$ENV"
 
   post_build:
     commands:
-      - echo "Backend deployment complete for $ENV!"
+      - echo "Backend deployment complete for $ENV"

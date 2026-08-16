@@ -10,7 +10,7 @@
     "idle"
   ],
   "host_permissions": [
-    "https://d1pjkjoqck0lva.cloudfront.net/*"
+    "https://dev.secureview.websaleem.com/*"
   ],
   "background": {
     "service_worker": "background/background.js"

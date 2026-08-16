@@ -23,3 +23,6 @@ expressions.txt
 # Python
 __pycache__/
 *.pyc
+
+# CloudFront config snapshots taken before a migration (local only)
+infra/backups/

@@ -29,9 +29,9 @@ CATEGORIES = [
     "Government", "Health & Fitness", "Travel", "Sports", 
     "Food & Dining", "Productivity", "Gaming", 
     "Adult Content", "Malware / Phishing", "Personal", 
-    "Jobs & Careers", "Business", "Real Estate", 
-    "Arts & Design", "Automotive", "Science & Nature", "Religion & Spirituality", 
-    "Telecommunications", "Other"
+    "Jobs & Careers", "Business", "Real Estate",
+    "Arts & Design", "Automotive", "Science & Nature", "Religion & Spirituality",
+    "Telecommunications", "Utilities & Energy", "Other"
 ]
 
 SYSTEM_PROMPT = """You are a URL categorisation engine.
@@ -143,6 +143,36 @@ def invoke_nova(hostname: str, title: str) -> str:
     return raw
 
 
+# Common near-misses for allowlisted names. The model is told to answer with an
+# exact list entry and runs at temperature 0, but it still occasionally shortens
+# a compound name. Mapping the handful of predictable variants avoids losing a
+# good classification to "Other" — and because every value is an allowlisted
+# name, it does not reopen the door to arbitrary model output.
+CATEGORY_ALIASES = {
+    "utilities":        "Utilities & Energy",
+    "energy":           "Utilities & Energy",
+    "energy & utility": "Utilities & Energy",
+    "utility":          "Utilities & Energy",
+    "finance":          "Finance & Banking",
+    "banking":          "Finance & Banking",
+    "news":             "News & Media",
+    "media":            "News & Media",
+    "social":           "Social Media",
+    "health":           "Health & Fitness",
+    "fitness":          "Health & Fitness",
+    "food":             "Food & Dining",
+    "dining":           "Food & Dining",
+    "jobs":             "Jobs & Careers",
+    "careers":          "Jobs & Careers",
+    "arts":             "Arts & Design",
+    "design":           "Arts & Design",
+    "science":          "Science & Nature",
+    "nature":           "Science & Nature",
+    "religion":         "Religion & Spirituality",
+    "telecom":          "Telecommunications",
+}
+
+
 def sanitise_category(raw: str) -> str:
     """Map model output onto the fixed category list.
 
@@ -157,6 +187,10 @@ def sanitise_category(raw: str) -> str:
         if cat.lower() == cleaned.lower():
             return cat
 
+    alias = CATEGORY_ALIASES.get(cleaned.lower())
+    if alias:
+        return alias
+
     log.warning(json.dumps({
         "event":  "category_fallback",
         "result": "Other",
@@ -168,9 +202,21 @@ def lambda_handler(event, context):
     lambda_req_id = context.aws_request_id if context else "local"
 
     try:
-        body     = json.loads(event.get("body") or "{}")
-        hostname = body.get("hostname", "").strip()
-        title    = body.get("title", "").strip()
+        body = json.loads(event.get("body") or "{}")
+
+        # Type-check before touching the values. Previously a non-string
+        # hostname (or a JSON body that was a list or null) raised
+        # AttributeError and surfaced as a 500 — a malformed request should be
+        # a 400, and it should not cost an unhandled exception to say so.
+        if not isinstance(body, dict):
+            return _resp(400, {"error": "body must be a JSON object"})
+
+        hostname = body.get("hostname")
+        title    = body.get("title", "")
+        if not isinstance(hostname, str) or not isinstance(title, str):
+            return _resp(400, {"error": "hostname and title must be strings"})
+        hostname = hostname.strip()
+        title    = title.strip()
 
         log.info(json.dumps({
             "event":         "request_received",
@@ -207,11 +253,16 @@ def lambda_handler(event, context):
 
 
 def _resp(status: int, body: dict) -> dict:
+    # Deliberately NO Access-Control-Allow-Origin.
+    #
+    # The only legitimate caller is the extension's service worker, and an MV3
+    # worker holding host_permissions for this host is not subject to CORS — it
+    # never needed the header. Sending "*" let any web page invoke this endpoint
+    # from a visitor's browser, which also defeated the WAF: the rate limit is
+    # per IP, so a busy site fans the cost out across its visitors' addresses.
+    # Omitting the header makes browsers refuse to hand the response to page JS.
     return {
         "statusCode": status,
-        "headers": {
-            "Content-Type":                "application/json",
-            "Access-Control-Allow-Origin": "*",
-        },
+        "headers": {"Content-Type": "application/json"},
         "body": json.dumps(body),
     }

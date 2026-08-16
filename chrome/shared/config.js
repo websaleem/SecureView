@@ -7,7 +7,11 @@
 
 // Split-string construction to keep the host out of naive repo scrapers. This
 // is obfuscation, not a secret: the value ships in the extension either way.
-const _CF_HOST = ["https://", "d1pjkjoqck0lva", ".cloudfront", ".net"].join("");
+//
+// The dev alias, not a *.cloudfront.net domain: the alias survives a
+// distribution being replaced, so this value does not have to be chased.
+// scripts/build-zip.sh swaps it for the production alias on the prod channel.
+const _CF_HOST = ["https://", "dev.secureview", ".websaleem", ".com"].join("");
 const CF_CONFIG = {
   url: `${_CF_HOST}/categorize`
 };
