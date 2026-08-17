@@ -50,7 +50,11 @@ jobs:
             --refresh-token "$CWS_REFRESH_TOKEN" \
             --auto-publish
 
+      # always(): if the store upload fails — an expired CWS_REFRESH_TOKEN is the
+      # usual cause — the zip is still the artifact you want, so you can publish
+      # it by hand from the developer dashboard instead of re-running the build.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: SecureView-${{ github.ref_name }}
           path: SecureView*.zip

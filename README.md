@@ -77,7 +77,15 @@ The first three CWS values are tied to your Google account and shared across cha
 #### Generating client_id, client_secret, refresh_token
 
 1. **Google Cloud Console** → create or pick a project → **APIs & Services → Library** → enable **Chrome Web Store API**.
-2. **APIs & Services → OAuth consent screen** → user type **External** is fine; add yourself as a Test User. No need to publish.
+2. **APIs & Services → OAuth consent screen** → user type **External**, add yourself as a Test User, then **set Publishing status to "In production"**.
+
+   > **Do not leave it in "Testing".** Google expires refresh tokens for apps in
+   > Testing status after **7 days**, after which every release fails with
+   > `invalid_grant: Token has been expired or revoked` at the `Fetching token...`
+   > step — before the zip is ever uploaded. Publishing the consent screen removes
+   > that expiry. You will see an "unverified app" warning during the one-off
+   > authorization; that is expected and safe to continue past, since you are the
+   > only user of your own OAuth client.
 3. **APIs & Services → Credentials → Create credentials → OAuth client ID**.
    - Set application type to **Web application**.
    - Under **Authorized redirect URIs**, add exactly: `https://developers.google.com/oauthplayground`
