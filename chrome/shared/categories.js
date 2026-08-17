@@ -1,4 +1,18 @@
-// URL categorization rules based on domain patterns
+// URL categorization rules based on domain patterns.
+//
+// This list is deliberately NOT exhaustive, and should not be grown into an
+// index of the web. It exists to answer the common cases offline and for free;
+// everything it misses falls through to the Bedrock backend, which is the
+// component that is actually supposed to know the long tail. Anything matched
+// there is cached per-hostname for 30 days, so a miss costs one round-trip on
+// first visit, not one per page view.
+//
+// So a well-known site being absent here is expected, not a bug. Regional
+// mastheads are the clearest example: `news.com.au` matches the "news" keyword
+// while `smh.com.au` matches nothing — the initialism carries no signal the
+// rules can see, and it resolves correctly via the backend instead. Adding
+// domains case by case would mean maintaining that tail by hand forever, which
+// is the job the AI pipeline was built to take over.
 const CATEGORY_RULES = [
   {
     name: "News & Media",

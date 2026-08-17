@@ -45,19 +45,53 @@ in the built zip.
 
 ### Shipping a release
 
-```bash
-# 1. Bump version in manifest.json and commit.
-# 2. Push to the appropriate branch:
-git push origin dev      # beta
-git push origin main     # production
+Two conditions must BOTH hold for a push to reach the store — miss either one and
+the run either never starts or builds a zip and quietly skips the upload:
 
-# 3. Watch the workflow in GitHub Actions; it will:
+1. **The commit touches `chrome/**`.** The workflow's `paths:` filter ignores
+   everything else, so a docs- or workflow-only commit triggers no run at all.
+2. **The commit message contains `[deploy]`.** Without it the job builds and
+   archives the zip but skips the publish step. This is the gate that makes an
+   ordinary push safe: routine commits to `main` never ship to users by accident.
+
+```bash
+# 1. Bump version in chrome/manifest.json (a version already live on that
+#    listing is rejected by the store; the two channels version independently).
+# 2. Commit with the [deploy] marker, touching something under chrome/:
+git commit -m "release: 1.0.10 [deploy]"
+
+# 3. Push to the channel's branch:
+git push origin dev      # beta       -> CWS_EXTENSION_ID_BETA
+git push origin main     # production -> CWS_EXTENSION_ID
+
+# 4. Watch the workflow in GitHub Actions; it will:
 #    - build the zip with the right channel (beta for dev, production for main)
 #    - upload + auto-publish via chrome-webstore-upload-cli
-#    - archive the zip as a workflow artifact for 90 days
+#    - archive the zip as a workflow artifact for 90 days (even if upload fails)
 ```
 
+To publish without a code change — re-running a release whose upload failed on
+credentials, for instance — use **Actions → Deploy Chrome Extension → Run
+workflow**, pick the branch, and tick **Publish to Chrome Web Store**. That path
+bypasses both conditions above.
+
 Chrome Web Store review usually clears within a few hours for an established item.
+
+#### When the upload step fails
+
+The error at `Fetching token...` tells you which of the three CWS secrets is wrong:
+
+| Error | Meaning | Fix |
+|---|---|---|
+| `invalid_grant` | refresh token expired or revoked | regenerate it; check the consent screen is "In production" (see below) |
+| `unauthorized_client` | token is valid but was minted by a *different* OAuth client than `CWS_CLIENT_ID`/`CWS_CLIENT_SECRET` | regenerate the token with ⚙️ **Use your own OAuth credentials** ticked, pasting the same id/secret held in the GitHub secrets |
+| `invalid_client` | client id or secret itself is wrong | re-copy both from the Cloud Console credentials page |
+
+A refresh token is bound to the client that minted it, so rotating the client
+secret or creating a new OAuth client invalidates the token — update all three
+secrets together, in one pass. The zip is archived as an artifact regardless, so
+a failed upload can always be finished by hand from the developer dashboard
+instead of re-running the build.
 
 ### One-time setup — Chrome Web Store API credentials
 
