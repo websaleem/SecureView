@@ -34,7 +34,7 @@
     <h1 style="margin:0;">SecureView – Terms of Service</h1>
   </div>
   <p class="meta">
-    Last updated: April 11, 2026 &nbsp;·&nbsp; Version 1.0.0<br />
+    Last updated: August 16, 2026 &nbsp;·&nbsp; Version 1.0.1<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -57,9 +57,11 @@
   <p>
     SecureView is a Chrome browser extension that tracks your active browsing time per
     domain, categorizes visited websites, and presents daily usage summaries. It is designed
-    as a personal productivity and self-awareness tool. All data is stored locally on your
-    device unless AI-based categorization is enabled, in which case limited data is sent to
-    a third-party classification service (see our
+    as a personal productivity and self-awareness tool. Your browsing records are stored
+    locally on your device. Sites that the built-in rule set cannot classify are sent to a
+    cloud AI classification service running on Amazon Web Services — this happens
+    automatically and is not something you opt in to; the "Force AI Classification" setting
+    extends it to every site. Only the URL, hostname and page title are sent (see our
     <a href="https://secureview.websaleem.com/privacy.html">Privacy Policy</a>).
   </p>
 
@@ -98,8 +100,8 @@
     incorporated into these Terms by reference. Key points:
   </p>
   <ul>
-    <li>All browsing data is stored locally on your device and is never sold or shared with third parties.</li>
-    <li>When AI categorization is enabled, the visited URL, hostname, and page title are sent to an AWS-hosted classification service. No other personal data is transmitted.</li>
+    <li>Your browsing records are stored locally on your device and are never sold or shared with third parties.</li>
+    <li>For sites the built-in rule set cannot classify, the visited URL (with query string and fragment stripped), hostname, and page title are sent to an AWS-hosted classification service powered by Amazon Bedrock. This happens automatically; the "Force AI Classification" setting extends it to every site. No other personal data is transmitted.</li>
     <li>You can clear all data at any time from within the Extension popup.</li>
     <li>Uninstalling the Extension permanently removes all locally stored data.</li>
   </ul>
@@ -110,7 +112,7 @@
     is subject to their own terms and privacy policies:
   </p>
   <ul>
-    <li><strong>Amazon Web Services (AWS)</strong> — CloudFront, Lambda@Edge, API Gateway, Lambda, and Amazon Bedrock are used for AI-based website classification when enabled.</li>
+    <li><strong>Amazon Web Services (AWS)</strong> — CloudFront, Lambda@Edge, API Gateway, Lambda, and Amazon Bedrock carry out the AI website classification. Classification runs in the cloud on AWS, not on your device.</li>
     <li><strong>Google Favicon Service</strong> — domain favicon images shown in the popup are fetched from <code>www.google.com/s2/favicons</code>.</li>
   </ul>
   <p>

@@ -146,7 +146,7 @@
             <div class="card">
                 <i class="fas fa-layer-group"></i>
                 <h3>Intelligent Categorization</h3>
-                <p>SecureView automatically groups your browsing into 11 intuitive categories — Technology, Social Media, Finance, Entertainment, and more — using a built-in rule set backed by AI classification for unrecognized sites.</p>
+                <p>SecureView automatically groups your browsing into more than 20 categories — Technology, Social Media, Finance, Entertainment, Utilities &amp; Energy, and more — using a built-in rule set backed by cloud AI classification for unrecognized sites.</p>
             </div>
             <div class="card">
                 <i class="fas fa-clock"></i>
@@ -168,7 +168,7 @@
                 <p>SecureView uses a two-stage categorization approach. A built-in rule set covers thousands of popular domains instantly — no network call needed. For sites not in the rule set, an AI classification service powered by Amazon Bedrock determines the category.</p>
                 <p>The AI pipeline runs on AWS infrastructure (CloudFront → Lambda@Edge → API Gateway → Lambda → Bedrock). Only the site URL, hostname, and page title are ever sent — and results are cached locally so the same domain is never sent twice.</p>
                 <ul class="tech-list">
-                    <li><i class="fas fa-check"></i> <strong>Local-First:</strong> Rule-based matching needs no internet connection.</li>
+                    <li><i class="fas fa-check"></i> <strong>Rules First:</strong> Thousands of domains are matched on your device with no network call. Sites the rules don't cover are sent to the cloud AI service — the categorization itself does not run locally.</li>
                     <li><i class="fas fa-check"></i> <strong>Local Storage:</strong> Daily browsing records stay on your device in Chrome's storage API.</li>
                     <li><i class="fas fa-check"></i> <strong>You're in Control:</strong> Exclude domains, toggle AI classification, or clear all data from the popup.</li>
                     <li><i class="fas fa-check"></i> <strong>Transparent:</strong> No analytics engines, no selling of data, no third-party trackers.</li>
