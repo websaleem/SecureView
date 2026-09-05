@@ -127,10 +127,41 @@ function splitByDay(startMs, endMs) {
     const d = new Date(cursor);
     const nextMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
     const segmentEnd = Math.min(nextMidnight, endMs);
-    segments.push({ key: dayKeyFor(cursor), ms: segmentEnd - cursor });
+    // `lastInstant` is the final millisecond INSIDE this segment's day, used to
+    // stamp lastVisit. Using the flush time for every segment would date a
+    // yesterday segment as today, and loadWeekData picks the winning category
+    // label by highest lastVisit. segmentEnd itself is exclusive — at a midnight
+    // boundary it is the next day's first instant — hence the -1.
+    segments.push({ key: dayKeyFor(cursor), ms: segmentEnd - cursor, lastInstant: segmentEnd - 1 });
     cursor = segmentEnd;
   }
   return segments;
+}
+
+// chrome.storage.local reports failures through chrome.runtime.lastError, NOT
+// by throwing or withholding the callback — so an unchecked write resolves
+// exactly like a successful one. The extension has no `unlimitedStorage`
+// permission, so it lives inside the ~10MB quota; once that fills, every write
+// silently no-ops and tracking stops recording with nothing in the logs.
+// These wrappers turn that into a rejection so callers can at least say so.
+function storageSet(items) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(items, () => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message || "storage.set failed"));
+      else resolve();
+    });
+  });
+}
+
+function storageRemove(keys) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.remove(keys, () => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message || "storage.remove failed"));
+      else resolve();
+    });
+  });
 }
 
 async function getStorageData(key = getTodayKey()) {
@@ -142,9 +173,26 @@ async function getStorageData(key = getTodayKey()) {
 }
 
 async function saveStorageData(data, key = getTodayKey()) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ [key]: data }, resolve);
-  });
+  return storageSet({ [key]: data });
+}
+
+// Rebuild `categories` and `totalSeconds` from the domain entries. Derived
+// state, never mutated independently — so a re-categorized domain cannot leave
+// stale seconds behind in the category it used to belong to.
+function recomputeTotals(data) {
+  data.categories = {};
+  data.totalSeconds = 0;
+  for (const d of Object.values(data.domains)) {
+    const cat = d.category || "Other";
+    if (!data.categories[cat]) {
+      data.categories[cat] = {
+        name: cat, icon: d.categoryIcon || "\u{1F310}",
+        color: d.categoryColor || "#7F8C8D", seconds: 0
+      };
+    }
+    data.categories[cat].seconds += d.seconds;
+    data.totalSeconds += d.seconds;
+  }
 }
 
 // ─── Time accumulation ────────────────────────────────────────────────────────
@@ -158,6 +206,18 @@ async function flushTime(url) {
   const now = Date.now();
   const spanMs = now - sessionStart;
   if (spanMs <= 0) return;
+
+  // Resolve the hostname BEFORE advancing sessionStart. These two checks used
+  // to sit after it, so an unparseable URL discarded the elapsed time instead
+  // of leaving it to accrue into the next flush.
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return;
+  }
+  // Refuses __proto__ and friends — see isSafeHostKey in categories.js.
+  if (!isSafeHostKey(hostname)) return;
 
   // A gap far longer than the tick interval means the worker was suspended or
   // the machine slept — the user was not browsing for most of it. Credit at
@@ -175,14 +235,6 @@ async function flushTime(url) {
   sessionStart = now;
   persistState();
 
-  let hostname;
-  try {
-    hostname = new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return;
-  }
-  if (!hostname) return;
-
   // Categorize outside the lock — slow, network-bound, internally cached.
   const category = await categorizeUrlEnhanced(url, currentTabTitle || "");
 
@@ -196,7 +248,7 @@ async function flushTime(url) {
         data.domains[hostname] = {
           url, hostname, title: initialTitle, seconds: 0, ms: 0,
           category: category.name, categoryIcon: category.icon,
-          categoryColor: category.color, lastVisit: now
+          categoryColor: category.color, lastVisit: segment.lastInstant
         };
       }
       const entry = data.domains[hostname];
@@ -212,29 +264,19 @@ async function flushTime(url) {
 
       Logger.info(LOG, `Flush: ${hostname} → +${wholeSeconds}s (${category.name}) [${segment.key}]`);
 
-      entry.lastVisit = now;
+      entry.lastVisit = segment.lastInstant;
       entry.category = category.name;
       entry.categoryIcon = category.icon;
       entry.categoryColor = category.color;
 
-      // Recompute categories and totalSeconds from domain entries so that
-      // category changes (e.g. "Other" → "Technology" after ML classification)
-      // don't leave stale seconds in the old category.
-      data.categories = {};
-      data.totalSeconds = 0;
-      for (const d of Object.values(data.domains)) {
-        const cat = d.category || "Other";
-        if (!data.categories[cat]) {
-          data.categories[cat] = {
-            name: cat, icon: d.categoryIcon || "🌐",
-            color: d.categoryColor || "#7F8C8D", seconds: 0
-          };
-        }
-        data.categories[cat].seconds += d.seconds;
-        data.totalSeconds += d.seconds;
-      }
+      recomputeTotals(data);
 
       await saveStorageData(data, segment.key);
+    }).catch((e) => {
+      // sessionStart has already advanced, so this span cannot be replayed —
+      // say so loudly rather than losing time silently. Logger.error prints
+      // regardless of the debug flag.
+      Logger.error(LOG, `Failed to persist ${Math.round(segment.ms / 1000)}s for ${hostname} [${segment.key}]`, e?.message);
     });
   }
 }
@@ -260,6 +302,7 @@ function triggerEagerCategorization(url, title) {
   (async () => {
     try {
       const hostname = new URL(url).hostname.replace(/^www\./, "");
+      if (!isSafeHostKey(hostname)) return;
       const category = await categorizeUrlEnhanced(url, title || "");
       await withStorageLock(async () => {
         const data = await getStorageData();
@@ -321,6 +364,7 @@ async function syncTabTitle(url, title) {
   try {
     hostname = new URL(url).hostname.replace(/^www\./, "");
   } catch { return; }
+  if (!isSafeHostKey(hostname)) return;
   await withStorageLock(async () => {
     const data = await getStorageData();
     if (!data.domains[hostname]) return; // No entry yet — title is preserved in currentTabTitle until first flush
@@ -472,7 +516,87 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await pruneOldData();        // Drop data_* keys past the retention window
 });
 
-chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
+// True only for messages from one of this extension's own pages (the popup).
+//
+// onMessage also receives from the content script, which is injected into
+// <all_urls> — so without this test any page's content-script context could
+// invoke the destructive handlers below and wipe the day's record or add a
+// permanent exclusion. Extension pages have no `sender.tab`; content scripts
+// always do. The id check is belt-and-braces: `externally_connectable` is
+// absent, so third-party pages cannot reach this listener at all today, and
+// this keeps that true if it is ever re-added.
+function isFromExtensionPage(sender) {
+  return sender?.id === chrome.runtime.id && !sender.tab;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // ── Popup-initiated mutations of today's record ───────────────────────────
+  // These run HERE rather than in the popup because withStorageLock is a
+  // promise chain inside this worker — it cannot serialise a write issued from
+  // the popup's own context. Previously the popup wrote data_YYYY_MM_DD
+  // directly, so a flush already in flight (it awaits categorization, which can
+  // take seconds) would read before and write after, resurrecting data the user
+  // had just cleared or re-adding a domain they had just excluded.
+  if (message.type === "EXCLUDE_AND_CLEAR" && isSafeHostKey(message.hostname)) {
+    if (!isFromExtensionPage(sender)) {
+      Logger.warn(LOG, "Rejected EXCLUDE_AND_CLEAR from a non-extension sender");
+      sendResponse({ ok: false, error: "forbidden" });
+      return true;
+    }
+    const hostname = message.hostname;
+    (async () => {
+      try {
+        await ready();
+        const stored = await chrome.storage.local.get([EXCLUDED_DOMAINS_KEY]);
+        const list = stored[EXCLUDED_DOMAINS_KEY] || [];
+        if (!list.includes(hostname)) {
+          await storageSet({ [EXCLUDED_DOMAINS_KEY]: [...list, hostname] });
+        }
+        await withStorageLock(async () => {
+          const key = getTodayKey();
+          const data = await getStorageData(key);
+          if (data.domains[hostname]) {
+            delete data.domains[hostname];
+            recomputeTotals(data);
+            await saveStorageData(data, key);
+          }
+        });
+        Logger.info(LOG, `Excluded and cleared: ${hostname}`);
+        sendResponse({ ok: true });
+      } catch (e) {
+        Logger.error(LOG, `Failed to exclude ${hostname}`, e?.message);
+        sendResponse({ ok: false, error: e?.message });
+      }
+    })();
+    return true; // async sendResponse
+  }
+
+  if (message.type === "CLEAR_TODAY") {
+    if (!isFromExtensionPage(sender)) {
+      Logger.warn(LOG, "Rejected CLEAR_TODAY from a non-extension sender");
+      sendResponse({ ok: false, error: "forbidden" });
+      return true;
+    }
+    (async () => {
+      try {
+        await ready();
+        await withStorageLock(async () => {
+          await storageRemove(getTodayKey());
+          // Drop the in-flight span too, otherwise the seconds accumulated
+          // since the last flush are written straight back after the clear.
+          sessionStart = isUserIdle || !isWindowFocused ? null : Date.now();
+          persistState();
+        });
+        Logger.info(LOG, "Cleared today's data");
+        sendResponse({ ok: true });
+      } catch (e) {
+        Logger.error(LOG, "Failed to clear today's data", e?.message);
+        sendResponse({ ok: false, error: e?.message });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === "USER_ACTIVE") {
     // Only the tab the user is actually looking at may clear the idle flag.
     // The content script runs in every tab, and `scroll` fires on programmatic

@@ -1,3 +1,18 @@
+// Hostnames become object keys (data.domains[host], the category cache). Three
+// of them collide with JavaScript's object machinery, and `__proto__` is the
+// dangerous one: `obj["__proto__"] = x` sets the PROTOTYPE instead of creating a
+// property, so a truthiness check like `if (!data.domains[host])` sees
+// Object.prototype, skips creation, and the caller then mutates Object.prototype
+// itself — polluting every object in the worker.
+//
+// `http://__proto__/` is a legal URL and `new URL(...).hostname` returns exactly
+// that, so this is reachable by navigation on any network that resolves a
+// single-label host. Such a host is never real browsing, so refuse the key.
+const UNSAFE_HOST_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+function isSafeHostKey(hostname) {
+  return typeof hostname === "string" && hostname.length > 0 && !UNSAFE_HOST_KEYS.has(hostname);
+}
+
 // URL categorization rules based on domain patterns.
 //
 // This list is deliberately NOT exhaustive, and should not be grown into an
@@ -374,6 +389,6 @@ function categorizeUrl(url) {
 
 // Export for use in background.js and popup.js
 if (typeof module !== "undefined") {
-  module.exports = { categorizeUrl, CATEGORY_RULES };
+  module.exports = { categorizeUrl, CATEGORY_RULES, isSafeHostKey };
 }
 

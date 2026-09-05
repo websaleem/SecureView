@@ -55,9 +55,11 @@ else
   # rather than a *.cloudfront.net domain.
   MANAGE_DISTRIBUTION="${MANAGE_DISTRIBUTION:-false}"
   ADOPT_DISTRIBUTION_ID="${ADOPT_DISTRIBUTION_ID:-E13N2TZOSX24F7}"
-  # Dev's adopted distribution has no ACL of its own, and /categorize is
-  # unauthenticated — create one and attach it below.
-  CREATE_WEB_ACL="${CREATE_WEB_ACL:-true}"
+  # Dev deliberately runs without a WebACL. Rate limiting is a production
+  # concern here: dev's endpoint is not published in any shipped extension
+  # build, and the cost of a stray ACL is a monthly charge plus drift to manage.
+  # Set CREATE_WEB_ACL=true for a one-off if dev ever needs protecting.
+  CREATE_WEB_ACL="${CREATE_WEB_ACL:-false}"
 fi
 
 # Alias handling. CloudFront rejects an alias that another distribution already
