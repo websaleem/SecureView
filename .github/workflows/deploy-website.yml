@@ -9,6 +9,12 @@ on:
       - 'website/**'
   workflow_dispatch:
 
+# Least privilege for GITHUB_TOKEN: read the repository, and mint the OIDC
+# token that AWS exchanges for short-lived deployment credentials.
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -16,11 +22,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # OIDC rather than a stored access key: GitHub presents a short-lived
+      # token, AWS exchanges it for credentials that expire with the job, so
+      # there is no long-lived secret to leak or rotate. The role is shared by
+      # every websaleem project and reaches the site buckets only.
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: secureview-deploy-${{ github.run_id }}
           aws-region: ap-southeast-2
 
       - name: Deploy Website to S3 and Invalidate CloudFront
