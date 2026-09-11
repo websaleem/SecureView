@@ -265,8 +265,18 @@ Deploy either environment with one command — it packages both Lambdas, deploys
 both stacks in order, and feeds the API stack's outputs into the CDN stack:
 
 ```bash
+cp deploy.env.example deploy.env   # first run only: fill in the identifiers
 ./scripts/deploy-backend.sh dev
 ```
+
+`deploy.env` holds the AWS account id, the CloudFront distribution and OAC ids,
+and the prod certificate ARN. It is gitignored. None of those are secrets, but
+this repository is public and together they name the exact infrastructure the
+scripts deploy to — which is free reconnaissance for anyone reading. Both
+scripts fail with a named variable rather than falling back to a default, and
+`teardown-legacy.sh` refuses to run at all until `SECUREVIEW_ACCOUNT_ID` matches
+the caller's account. Environment variables take precedence, so CI can supply
+the values without a file.
 
 Lambda code is uploaded under a **content-hashed S3 key**. A code change changes
 the key, which replaces the `Lambda::Version`, which repoints the CloudFront

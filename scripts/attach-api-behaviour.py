@@ -226,7 +226,7 @@ def main() -> int:
 
     cf.update_distribution(Id=args.distribution_id, IfMatch=etag, DistributionConfig=config)
     alias = (config.get("Aliases", {}).get("Items") or ["<domain>"])[0]
-    print(f"\nApplied. CloudFront redeploys in ~3-5 min, then verify:\n")
+    print("\nApplied. CloudFront redeploys in ~3-5 min, then verify:\n")
     print(f"  curl -s -X POST https://{alias}/categorize \\")
     print("    -H 'Content-Type: application/json' \\")
     print('    -d \'{"url":"https://agl.com.au/","hostname":"agl.com.au","title":"AGL Energy"}\'')

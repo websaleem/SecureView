@@ -30,17 +30,38 @@ EDGE_REGION=us-east-1
 API_STACK="secureview-api-${ENV}"
 CDN_STACK="secureview-edge-cdn-${ENV}"
 
+# Deployment identifiers live in deploy.env, which is gitignored. They are not
+# secrets, but together they name the AWS account and the exact distributions
+# this deploys to — free reconnaissance in a public repository. Environment
+# variables still win, so CI can supply them without a file.
+#   cp deploy.env.example deploy.env && $EDITOR deploy.env
+ENV_FILE="${SECUREVIEW_ENV_FILE:-deploy.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "$ENV_FILE"; set +a
+fi
+
+require() {
+  local name=$1
+  if [[ -z "${!name:-}" ]]; then
+    echo "Missing $name. Set it in $ENV_FILE (see deploy.env.example) or export it." >&2
+    exit 2
+  fi
+}
+
 if [[ "$ENV" == "prod" ]]; then
   DEFAULT_ALIAS="secureview.websaleem.com"
   SITE_BUCKET="secureview.websaleem.com"
-  OAC_ID="${OAC_ID:-E37RLKCUPSENTL}"
+  require SECUREVIEW_PROD_OAC_ID
+  OAC_ID="${OAC_ID:-$SECUREVIEW_PROD_OAC_ID}"
   # Prod adopts its existing distribution rather than building a new one: that
   # distribution already holds the apex alias and a certificate the wildcard
   # does not cover, so recreating it would force a DNS cutover for no gain.
   # The stack still owns the edge signer; the distribution is wired by
   # scripts/attach-api-behaviour.py.
   MANAGE_DISTRIBUTION="${MANAGE_DISTRIBUTION:-false}"
-  ADOPT_DISTRIBUTION_ID="${ADOPT_DISTRIBUTION_ID:-EOOCNJ6DOIEP3}"
+  require SECUREVIEW_PROD_DISTRIBUTION_ID
+  ADOPT_DISTRIBUTION_ID="${ADOPT_DISTRIBUTION_ID:-$SECUREVIEW_PROD_DISTRIBUTION_ID}"
   # Prod's distribution already carries a CloudFront-managed ACL with a rate
   # limit PLUS IP-reputation, common-rule-set and known-bad-inputs groups.
   # Ours would be a downgrade, so do not create or attach one.
@@ -48,13 +69,15 @@ if [[ "$ENV" == "prod" ]]; then
 else
   DEFAULT_ALIAS="dev.secureview.websaleem.com"
   SITE_BUCKET="dev.secureview.websaleem.com"
-  OAC_ID="${OAC_ID:-E1Q0XJQQ940RUS}"
+  require SECUREVIEW_DEV_OAC_ID
+  OAC_ID="${OAC_ID:-$SECUREVIEW_DEV_OAC_ID}"
   # Dev adopts its existing distribution for the same reason prod does: it
   # already holds dev.secureview.websaleem.com and the wildcard certificate, so
   # reusing it avoids a DNS cutover and keeps the endpoint on a stable alias
   # rather than a *.cloudfront.net domain.
   MANAGE_DISTRIBUTION="${MANAGE_DISTRIBUTION:-false}"
-  ADOPT_DISTRIBUTION_ID="${ADOPT_DISTRIBUTION_ID:-E13N2TZOSX24F7}"
+  require SECUREVIEW_DEV_DISTRIBUTION_ID
+  ADOPT_DISTRIBUTION_ID="${ADOPT_DISTRIBUTION_ID:-$SECUREVIEW_DEV_DISTRIBUTION_ID}"
   # Dev's adopted distribution has no ACL of its own, and /categorize is
   # unauthenticated — create one and attach it below.
   CREATE_WEB_ACL="${CREATE_WEB_ACL:-true}"
@@ -76,7 +99,8 @@ fi
 
 # The wildcard cert covers dev.* but NOT the apex secureview.websaleem.com, so
 # prod needs its own cert ARN. Override with CERT_ARN when deploying prod.
-CERT_ARN="${CERT_ARN:-arn:aws:acm:us-east-1:715626528514:certificate/b9dc7752-38a7-46eb-a49f-3f89b90d1270}"
+require SECUREVIEW_CERT_ARN
+CERT_ARN="${CERT_ARN:-$SECUREVIEW_CERT_ARN}"
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 API_ARTIFACTS="secureview-artifacts-${ACCOUNT}-${API_REGION}"

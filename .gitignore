@@ -26,3 +26,11 @@ __pycache__/
 
 # CloudFront config snapshots taken before a migration (local only)
 infra/backups/
+
+# Deployment identifiers — account id, distribution ids, cert ARN. Not secrets,
+# but they name live infrastructure and this repository is public.
+deploy.env
+
+# Key material, in case any ever lands here
+*.pem
+*.key

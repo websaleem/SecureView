@@ -10,10 +10,10 @@
 #   secureview-cognito-auth   Cognito pool #1 (2 users)          — login removed
 #   secureview-backend-dev    API 1kbd8rx0k6, svCategorizeURL,
 #                             svSendEmailReport, Cognito #2,
-#                             distribution E13N2TZOSX24F7        — "dev" name, prod-ish content
+#                             the live dev distribution         — "dev" name, prod-ish content
 #   SecureViewBackend-dev     API 8vinwzmf85, svCategorizeURL-dev,
 #                             svSendEmailReport-dev, Cognito #3,
-#                             distribution E2GR0JKONMEAYE        — already deleted out of band
+#                             a distribution already deleted    — out of band
 #
 # Both stacks also declared their Lambda@Edge function in ap-southeast-2, where
 # CloudFront can never attach it; those were deleted by hand already, so the
@@ -60,7 +60,7 @@ LEGACY_SEA4_APIS=(               # ap-southeast-4
 
 # NOTE: deliberately EMPTY.
 #
-# Both distributions — E13N2TZOSX24F7 (dev) and EOOCNJ6DOIEP3 (prod) — are now
+# Both live distributions are now
 # ADOPTED, not superseded. They hold the live aliases and certificates and have
 # been rewired to the new API origins and edge signers, so deleting them would
 # take both sites down and force a DNS cutover for no benefit.
@@ -72,9 +72,21 @@ act()    { if $APPLY; then echo "  RUN  $*"; "$@"; else echo "  SKIP $*"; fi; }
 $APPLY || banner "DRY RUN — nothing will be deleted. Re-run with --apply."
 
 banner "Account check"
+# The guard is the whole reason this value is required rather than optional:
+# every target below is a hardcoded id, so running against the wrong account
+# would delete whatever happens to share those names.
+ENV_FILE="${SECUREVIEW_ENV_FILE:-deploy.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "$ENV_FILE"; set +a
+fi
+if [[ -z "${SECUREVIEW_ACCOUNT_ID:-}" ]]; then
+  echo "  SECUREVIEW_ACCOUNT_ID is not set (see deploy.env.example) — refusing to run" >&2
+  exit 2
+fi
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 echo "  account: $ACCOUNT"
-if [[ "$ACCOUNT" != "715626528514" ]]; then
+if [[ "$ACCOUNT" != "$SECUREVIEW_ACCOUNT_ID" ]]; then
   echo "  refusing to run against an unexpected account" >&2
   exit 1
 fi
@@ -113,7 +125,7 @@ done
 banner "2. Delete legacy CloudFormation stacks"
 # GUARD — do not skip this.
 #
-# secureview-backend-dev still OWNS distribution E13N2TZOSX24F7, which is the
+# secureview-backend-dev still OWNS the live dev distribution, which is the
 # live dev distribution: it holds dev.secureview.websaleem.com and has been
 # rewired to the new API. `delete-stack` would delete it, taking dev down and
 # losing the alias.
@@ -133,7 +145,7 @@ for s in "${LEGACY_STACKS[@]}"; do
 
   # A distribution the stack owns is only a hazard if it is BOTH still alive and
   # not marked Retain. With DeletionPolicy: Retain, deleting the stack detaches
-  # it and leaves it serving — which is how dev's E13N2TZOSX24F7 is handled.
+  # it and leaves it serving — which is how the dev distribution is handled.
   tpl=$(aws cloudformation get-template --region "$API_REGION" --stack-name "$s" --query TemplateBody --output text 2>/dev/null || true)
   owned_live=""
   for d in $(aws cloudformation list-stack-resources --region "$API_REGION" --stack-name "$s" \
