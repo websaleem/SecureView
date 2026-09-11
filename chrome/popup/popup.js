@@ -300,29 +300,24 @@ function renderSummary(data) {
   }
 }
 
-async function excludeAndClearDomain(hostname, data) {
-  // Add to exclusion list
-  const settings = await loadSettings();
-  if (!settings.excludedDomains.includes(hostname)) {
-    await saveExcludedDomains([...settings.excludedDomains, hostname]);
-  }
-
-  // Remove domain and rebuild categories + totalSeconds from remaining entries
-  delete data.domains[hostname];
-  data.categories = {};
-  data.totalSeconds = 0;
-  for (const d of Object.values(data.domains)) {
-    if (!data.categories[d.category]) {
-      data.categories[d.category] = { name: d.category, icon: d.categoryIcon, color: d.categoryColor, seconds: 0 };
-    }
-    data.categories[d.category].seconds += d.seconds;
-    data.totalSeconds += d.seconds;
-  }
-
-  // Persist the cleaned data
-  const key = getTodayKey();
-  await new Promise((resolve) => chrome.storage.local.set({ [key]: data }, resolve));
+// Both mutations of today's record are delegated to the service worker.
+//
+// The popup used to write data_YYYY_MM_DD itself, which raced the worker:
+// withStorageLock only serialises writes issued INSIDE the worker, so a flush
+// already in flight — it awaits categorization, which can take seconds — would
+// read the record before the popup's write and save it back afterwards. The
+// visible symptoms were an excluded site reappearing, and "Clear today's data"
+// appearing to succeed while the data came straight back.
+async function excludeAndClearDomain(hostname) {
+  const res = await chrome.runtime.sendMessage({ type: "EXCLUDE_AND_CLEAR", hostname });
+  if (!res?.ok) throw new Error(res?.error || "exclude failed");
   Logger.info(LOG, `Excluded and cleared tracking for: ${hostname}`);
+}
+
+async function clearTodayData() {
+  const res = await chrome.runtime.sendMessage({ type: "CLEAR_TODAY" });
+  if (!res?.ok) throw new Error(res?.error || "clear failed");
+  Logger.info(LOG, "Cleared today's browsing data");
 }
 
 // `refresh` is an optional callback (typically applyPeriod) the exclude
@@ -371,7 +366,7 @@ async function renderCurrentPage(data, refresh) {
       btn.textContent = "🚫";
       btn.title       = "Exclude this site and clear its tracking data";
       btn.onclick     = async () => {
-        await excludeAndClearDomain(hostname, data);
+        await excludeAndClearDomain(hostname);
         // Re-render against whichever period is on screen rather than dumping
         // today-only data into the views (which would briefly mismatch the
         // 7-day toggle state until storage.onChanged caught up).
@@ -638,11 +633,13 @@ async function init() {
 
   // Clear today
   document.getElementById("clear-btn").addEventListener("click", async () => {
-    if (confirm("Clear today's browsing data?")) {
-      Logger.info(LOG, "Clearing today's browsing data");
-      const key = getTodayKey();
-      await chrome.storage.local.remove(key);
+    if (!confirm("Clear today's browsing data?")) return;
+    try {
+      await clearTodayData();
       location.reload();
+    } catch (e) {
+      Logger.warn(LOG, "Clear failed", e?.message);
+      alert("Could not clear today's data. Please try again.");
     }
   });
 

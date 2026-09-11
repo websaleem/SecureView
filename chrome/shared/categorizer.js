@@ -21,6 +21,10 @@ const FORCE_CF_KEY    = "force_cloudfront";
 const BR_TIMEOUT_MS   = 10000;  // slightly higher than API Gateway direct to absorb Lambda@Edge cold starts
 const CACHE_VERSION   = 1;
 const CACHE_TTL_MS    = 30 * 24 * 60 * 60 * 1000; // 30 days
+// Hard ceiling on cached hostnames. At roughly 70 bytes per entry this caps
+// the cache near 350KB, well inside the ~10MB chrome.storage.local quota that
+// the day records also share.
+const MAX_CACHE_ENTRIES = 5000;
 const LOG_CAT         = "CATEGORIZER";
 
 // In-memory cache of the flag; kept in sync via storage listener.
@@ -68,10 +72,52 @@ async function getBRCache() {
   });
 }
 
+// Drop entries that are expired or from an older cache version, then evict the
+// oldest until the cache is within MAX_CACHE_ENTRIES. Returns the pruned object.
+//
+// Without this the cache was unbounded: one entry per distinct hostname ever
+// classified, kept forever. The 30-day TTL only ever gated READS — nothing
+// deleted anything, and pruneOldData in the background only matches data_* keys.
+// That matters more than the raw size, because the whole cache is serialised and
+// rewritten on every single miss (below), so the cost of a lookup grew with the
+// number of sites the user had ever visited.
+function pruneCache(cache) {
+  const now = Date.now();
+  for (const [host, entry] of Object.entries(cache)) {
+    const ts = typeof entry === "object" ? entry.ts : 0;
+    const v  = typeof entry === "object" ? entry.v  : null;
+    if (v !== CACHE_VERSION || !ts || now - ts > CACHE_TTL_MS) delete cache[host];
+  }
+  const hosts = Object.keys(cache);
+  if (hosts.length > MAX_CACHE_ENTRIES) {
+    hosts
+      .sort((a, b) => (cache[a].ts || 0) - (cache[b].ts || 0))
+      .slice(0, hosts.length - MAX_CACHE_ENTRIES)
+      .forEach((h) => delete cache[h]);
+  }
+  return cache;
+}
+
+// Cache writes are a read-modify-write of one shared object, so two
+// classifications finishing at once would each read the same snapshot and the
+// later write would drop the earlier entry. Chain them.
+let _cacheChain = Promise.resolve();
 async function setCachedCategory(hostname, categoryName) {
-  const cache = await getBRCache();
-  cache[hostname] = { category: categoryName, ts: Date.now(), v: CACHE_VERSION };
-  chrome.storage.local.set({ [BR_CACHE_KEY]: cache });
+  if (!isSafeHostKey(hostname)) return;
+  _cacheChain = _cacheChain.then(async () => {
+    const cache = pruneCache(await getBRCache());
+    cache[hostname] = { category: categoryName, ts: Date.now(), v: CACHE_VERSION };
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ [BR_CACHE_KEY]: cache }, () => {
+        // Surfaced rather than swallowed: a full quota silently no-ops the
+        // write, and a cache that never persists means a network call per page.
+        const err = chrome.runtime.lastError;
+        if (err) Logger.warn(LOG_CAT, `Category cache write failed: ${err.message}`);
+        resolve();
+      });
+    });
+  }).catch((e) => Logger.warn(LOG_CAT, "Category cache update failed", e?.message));
+  return _cacheChain;
 }
 
 // Returns the cached category name, or null if missing/expired/wrong version.
