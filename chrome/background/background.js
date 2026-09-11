@@ -49,6 +49,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // flushTime, triggerEagerCategorization, and syncTabTitle all read-modify-write
 // the same data_YYYY_MM_DD key. Without serialization, a slow categorization
 // network call interleaved with a fast tick can clobber accumulated seconds.
+// Bumped whenever the user destroys today's record (clear, or excluding a
+// domain). flushTime captures it before its slow categorization await and
+// abandons the write if it changed, because withStorageLock cannot help here:
+// the lock serialises the two write sections, but a flush that started BEFORE
+// a clear still carries a stale intent and would apply it afterwards, putting
+// the domain straight back into the day the user just emptied.
+let _dataGeneration = 0;
+
 let _writeChain = Promise.resolve();
 function withStorageLock(fn) {
   const next = _writeChain.then(fn, fn);
@@ -235,11 +243,18 @@ async function flushTime(url) {
   sessionStart = now;
   persistState();
 
+  // Snapshot the generation before the slow call below; see _dataGeneration.
+  const generation = _dataGeneration;
+
   // Categorize outside the lock — slow, network-bound, internally cached.
   const category = await categorizeUrlEnhanced(url, currentTabTitle || "");
 
   for (const segment of splitByDay(from, now)) {
     await withStorageLock(async () => {
+      if (_dataGeneration !== generation) {
+        Logger.info(LOG, `Discarding ${Math.round(segment.ms / 1000)}s for ${hostname} — today's data was cleared mid-flush`);
+        return;
+      }
       const data = await getStorageData(segment.key);
 
       if (!data.domains[hostname]) {
@@ -553,6 +568,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await storageSet({ [EXCLUDED_DOMAINS_KEY]: [...list, hostname] });
         }
         await withStorageLock(async () => {
+          _dataGeneration++;
           const key = getTodayKey();
           const data = await getStorageData(key);
           if (data.domains[hostname]) {
@@ -581,6 +597,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         await ready();
         await withStorageLock(async () => {
+          _dataGeneration++;
           await storageRemove(getTodayKey());
           // Drop the in-flight span too, otherwise the seconds accumulated
           // since the last flush are written straight back after the clear.
