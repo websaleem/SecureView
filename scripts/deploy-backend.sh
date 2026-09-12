@@ -78,11 +78,14 @@ else
   MANAGE_DISTRIBUTION="${MANAGE_DISTRIBUTION:-false}"
   require SECUREVIEW_DEV_DISTRIBUTION_ID
   ADOPT_DISTRIBUTION_ID="${ADOPT_DISTRIBUTION_ID:-$SECUREVIEW_DEV_DISTRIBUTION_ID}"
-  # Dev deliberately runs without a WebACL. Rate limiting is a production
-  # concern here: dev's endpoint is not published in any shipped extension
-  # build, and the cost of a stray ACL is a monthly charge plus drift to manage.
-  # Set CREATE_WEB_ACL=true for a one-off if dev ever needs protecting.
-  CREATE_WEB_ACL="${CREATE_WEB_ACL:-false}"
+  # Dev gets a rate-limiting WebACL too. It is NOT private: the beta channel
+  # (release.yml, SecureView Beta on the Web Store) ships with config.js and
+  # host_permissions pointing at dev.secureview.websaleem.com, so the endpoint
+  # is in a published extension and anyone can lift it from the package.
+  # /categorize is unauthenticated, and without an ACL the only brake on
+  # Bedrock spend was the API Gateway stage throttle. Costs roughly $6/month.
+  # Set CREATE_WEB_ACL=false only if the beta listing is retired.
+  CREATE_WEB_ACL="${CREATE_WEB_ACL:-true}"
 fi
 
 # Alias handling. CloudFront rejects an alias that another distribution already

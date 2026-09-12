@@ -42,7 +42,9 @@ jobs:
         run: |
           ZIP=$(ls SecureView*.zip | head -1)
           test -f "$ZIP" || { echo "no zip produced"; exit 1; }
-          npx --yes chrome-webstore-upload-cli@3 upload \
+          # Exact version, not @3: this process receives the Web Store refresh
+          # token, and a floating range would run whatever 3.x is published next.
+          npx --yes chrome-webstore-upload-cli@3.5.0 upload \
             --source "$ZIP" \
             --extension-id  "$CWS_EXTENSION_ID" \
             --client-id     "$CWS_CLIENT_ID" \

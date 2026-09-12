@@ -18,10 +18,18 @@ phases:
 
   build:
     commands:
-      # main -> prod, everything else -> dev
-      - BRANCH_NAME=$(echo $CODEBUILD_WEBHOOK_HEAD_REF | sed 's/refs\/heads\///')
-      - if [ "$BRANCH_NAME" = "main" ]; then ENV="prod"; else ENV="dev"; fi
-      - echo "Deploying SecureView backend to $ENV"
+      # CHANNEL is set on the CodeBuild project by infra/ci-cd.yaml, one pipeline
+      # per channel. CODEBUILD_WEBHOOK_HEAD_REF, which this used to read, is only
+      # populated for webhook-triggered builds and is always empty under
+      # CodePipeline — so every run, including the production pipeline's,
+      # resolved to dev. An unrecognised channel now stops the build instead.
+      - |
+        case "${CHANNEL:-}" in
+          production) ENV=prod ;;
+          beta)       ENV=dev ;;
+          *) echo "FATAL: CHANNEL must be 'production' or 'beta' (got '${CHANNEL:-}')"; exit 1 ;;
+        esac
+      - echo "Deploying SecureView backend to $ENV (channel $CHANNEL)"
       - ./scripts/deploy-backend.sh "$ENV"
 
   post_build:
