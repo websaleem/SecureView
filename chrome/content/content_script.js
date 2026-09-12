@@ -1,11 +1,18 @@
 // SecureView Content Script
 // Detects user activity on the page and notifies background service worker
 
-(async function () {
+(function () {
   const LOG = "CONTENT";
-  await Logger.init();
 
-  Logger.debug(LOG, `Loaded content script: ${location.hostname}`);
+  // Listeners are registered synchronously below, BEFORE the logger's config is
+  // read. This used to be an async IIFE that awaited Logger.init() first, so a
+  // storage read that threw — which is what happens to a content script left
+  // orphaned by an extension update — rejected before a single listener was
+  // attached, and the script silently did nothing for that tab. Whether debug
+  // logging is on has no business gating whether the extension works.
+  Logger.init()
+    .then(() => Logger.debug(LOG, `Loaded content script: ${location.hostname}`))
+    .catch(() => { /* logging config unavailable; tracking continues regardless */ });
 
   // ─── Title reporting ────────────────────────────────────────────────────────
   // Push the page title to the background immediately so categorization fires
@@ -18,7 +25,11 @@
     if (!title || title === _lastReportedTitle) return;
     _lastReportedTitle = title;
     Logger.debug(LOG, `Reporting title (${reason}): "${title}"`);
-    chrome.runtime.sendMessage({ type: "PAGE_READY", title, url: location.href }).catch(() => {});
+    // No url field: the background reads sender.tab.url instead, because a page
+    // controls what its content script can claim. Sending location.href anyway
+    // meant the full URL — query string and fragment included — travelled in a
+    // message nothing reads, one refactor away from being trusted.
+    chrome.runtime.sendMessage({ type: "PAGE_READY", title }).catch(() => {});
   }
 
   // Fire immediately if document already finished loading, otherwise wait for load
