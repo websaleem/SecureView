@@ -35,7 +35,7 @@
     <h1 style="margin:0;">SecureView – Privacy Policy</h1>
   </div>
   <p class="meta">
-    Last updated: September 20, 2026 &nbsp;·&nbsp; Version 1.0.5<br />
+    Last updated: September 20, 2026 &nbsp;·&nbsp; Version 1.0.6<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -136,6 +136,14 @@
     extension retains the current day plus the 6 prior days of data; older records are
     pruned automatically. You can also clear today's data at any time via the popup.
     Uninstalling the extension removes all locally stored data.
+  </p>
+  <p>
+    That covers the data held on your device, which is all of your browsing history.
+    Separately, the AI classification request described in section 3 reaches AWS, and
+    Amazon CloudWatch records operational logs for the edge and Lambda functions that
+    serve it. Those logs hold request metadata, not your browsing history, and they are
+    currently kept without a fixed expiry. CloudFront access logging is not enabled, so
+    no per-request log of your visits is written to storage under our control.
   </p>
 
   <h2>7. Third-Party Services</h2>
