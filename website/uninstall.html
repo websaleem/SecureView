@@ -250,6 +250,11 @@
 
             <form id="contactForm" action="https://formspree.io/f/mreaakga" method="POST">
       <input type="text" name="_gotcha" style="display:none" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <!-- All these sites post to one Formspree endpoint. Without this the
+           inbox cannot tell them apart: the topic lists differ per product, but
+           "Feature request" and the browser and privacy topics are identical. -->
+      <input type="hidden" name="product" value="SecureView (uninstall feedback)">
+      <input type="hidden" name="_subject" value="SecureView (uninstall feedback) — support request">
                 <div class="form-group">
                     <label for="name">Name</label>
                     <input type="text" id="name" name="name" placeholder="Your name" required>
