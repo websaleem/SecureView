@@ -63,9 +63,53 @@ function getWeekRangeLabel() {
   return `${fmt(start)} – ${fmt(end)}`;
 }
 
+// Days shown in the history panel and the week graph. Matches RETENTION_DAYS in
+// the background: storage never keeps more than that, so a longer window could
+// only ever add permanently empty columns.
+const HISTORY_DAYS = 7;
+
+// Storage key for a given date. Mirrors dayKeyFor() in the background, and
+// exists so the format is written once here rather than in each caller — it was
+// spelled out three times, which is three chances to drift from the regex that
+// filters these keys back out.
+function dayKeyForDate(d) {
+  return `data_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}_${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// The last HISTORY_DAYS calendar days, oldest first, with an entry for every day
+// whether or not storage holds one.
+//
+// The gap-filling is the whole point. The history panel used to render only the
+// days present in storage, so a day with no activity was not drawn at all —
+// and a fresh install, which legitimately has one day of data, looked
+// indistinguishable from history having been lost. An absent day now renders as
+// an empty column and an explicit row.
+//
+// `present` separates "nothing was recorded" from "recorded, and it was zero":
+// the first is a gap, the second is a day the user genuinely spent no tracked
+// time, and the list says which.
+function buildDayWindow(byKey) {
+  const todayKey = getTodayKey();
+  const days = [];
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const key = dayKeyForDate(date);
+    const stored = byKey[key];
+    days.push({
+      key,
+      date,
+      isToday: key === todayKey,
+      present: Boolean(stored),
+      data: stored || { domains: {}, categories: {}, totalSeconds: 0 },
+      totalSeconds: (stored && stored.totalSeconds) || 0,
+    });
+  }
+  return days;
+}
+
 function getTodayKey() {
-  const now = new Date();
-  return `data_${now.getFullYear()}_${String(now.getMonth() + 1).padStart(2, "0")}_${String(now.getDate()).padStart(2, "0")}`;
+  return dayKeyForDate(new Date());
 }
 
 function getFaviconUrl(hostname) {
@@ -110,15 +154,8 @@ async function loadWeekData() {
   const all = await loadAllKeys();
   const byKey = Object.fromEntries(all.map((e) => [e.key, e.data || {}]));
 
-  // Build last-7-days window (oldest first), filling gaps with empty entries.
-  const byDay = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = `data_${d.getFullYear()}_${String(d.getMonth() + 1).padStart(2, "0")}_${String(d.getDate()).padStart(2, "0")}`;
-    const data = byKey[key] || { domains: {}, categories: {}, totalSeconds: 0 };
-    byDay.push({ key, date: d, totalSeconds: data.totalSeconds || 0 });
-  }
+  // One definition of "the last 7 days", shared with the history panel.
+  const byDay = buildDayWindow(byKey);
 
   const aggregated = { domains: {}, categories: {}, totalSeconds: 0, byDay };
 
@@ -455,27 +492,30 @@ async function renderSettings(data) {
   renderExclusionList(settings.excludedDomains, data);
 }
 
-function renderHistoryGraph(all) {
+// Takes the gap-filled window from buildDayWindow (oldest first), NOT the raw
+// list of stored keys. It used to take the latter and draw a column only for
+// days storage happened to hold, so the axis silently changed width and a quiet
+// day was indistinguishable from a missing one.
+function renderHistoryGraph(days) {
   const container = document.getElementById("history-graph-container");
   if (!container) return;
-  
-  if (!all || all.length === 0) {
+
+  if (!days || days.length === 0) {
     container.innerHTML = "";
     return;
   }
 
-  const days = all.slice(0, 7).reverse();
-  const maxSeconds = Math.max(...days.map(d => d.data.totalSeconds || 0));
+  // Seed with 0 so a window of entirely empty days yields 0 rather than
+  // -Infinity, which would make every height NaN.
+  const maxSeconds = Math.max(0, ...days.map(d => d.totalSeconds || 0));
 
   let barsHtml = '';
   let labelsHtml = '';
 
   days.forEach((dayData) => {
-    const { key, data } = dayData;
-    const [, year, month, day] = key.split("_");
-    const date = new Date(year, month - 1, day);
-    const label = date.toLocaleDateString("en-US", { weekday: "short" });
-    
+    const { date, data, isToday, present } = dayData;
+    const label = isToday ? "Today" : date.toLocaleDateString("en-US", { weekday: "short" });
+
     const total = data.totalSeconds || 0;
     const heightPct = maxSeconds > 0 ? (total / maxSeconds) * 100 : 0;
     
@@ -492,10 +532,15 @@ function renderHistoryGraph(all) {
       }
     });
 
+    // An absent day still gets a column, drawn as a flat stub and marked so it
+    // reads as "nothing here" rather than as a day that was never offered.
+    const tooltip = present
+      ? `${label}: ${formatDurationShort(total)}`
+      : `${label}: no activity recorded`;
     barsHtml += `
-      <div class="graph-col" style="height: ${Math.max(heightPct, 2)}%;">
+      <div class="graph-col${present ? "" : " is-empty"}" style="height: ${Math.max(heightPct, 2)}%;">
         ${segmentsHtml}
-        <div class="graph-tooltip">${label}: ${formatDurationShort(total)}</div>
+        <div class="graph-tooltip">${escapeHtml(tooltip)}</div>
       </div>
     `;
     labelsHtml += `<div class="graph-label">${label}</div>`;
@@ -509,24 +554,34 @@ function renderHistoryGraph(all) {
 
 async function renderHistory() {
   const all = await loadAllKeys();
+  const byKey = Object.fromEntries(all.map((e) => [e.key, e.data || {}]));
+  const days = buildDayWindow(byKey);
   const container = document.getElementById("history-list");
-  
-  renderHistoryGraph(all);
 
-  if (all.length === 0) {
-    container.innerHTML = `<div class="empty-state"><div class="empty-text">No history available</div></div>`;
-    return;
-  }
+  renderHistoryGraph(days);
 
-  const todayKey = getTodayKey();
-  container.innerHTML = all.map(({ key, data }) => {
-    const [, year, month, day] = key.split("_");
-    const date = new Date(year, month - 1, day);
-    const label = key === todayKey ? "Today" : date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  // Newest first for the list; the graph reads oldest-to-newest left-to-right.
+  // No empty state: the window always has HISTORY_DAYS rows, and saying "no
+  // activity recorded" on each of them is more honest than "No history
+  // available", which previously appeared whenever storage was empty and read
+  // as though data had been lost rather than never collected.
+  container.innerHTML = days.slice().reverse().map(({ date, data, isToday, present }) => {
+    const label = isToday
+      ? "Today"
+      : date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+
+    if (!present) {
+      return `
+        <div class="history-day is-empty">
+          <span class="history-day-date">${escapeHtml(label)}</span>
+          <span class="history-day-stats">No activity recorded</span>
+        </div>`;
+    }
+
     const sitesCount = Object.keys(data.domains || {}).length;
     return `
       <div class="history-day">
-        <span class="history-day-date">${label}</span>
+        <span class="history-day-date">${escapeHtml(label)}</span>
         <span class="history-day-stats">${formatDurationShort(data.totalSeconds || 0)} · ${sitesCount} site${sitesCount !== 1 ? "s" : ""}</span>
       </div>`;
   }).join("");

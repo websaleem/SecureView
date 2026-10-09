@@ -6,7 +6,7 @@
   "scripts": {
     "build": "./scripts/build-zip.sh",
     "build:beta": "CHANNEL=beta ./scripts/build-zip.sh",
-    "test": "node test/verify-build.mjs"
+    "test": "node test/verify-build.mjs && node test/verify-history-window.mjs"
   },
   "license": "ISC"
 }

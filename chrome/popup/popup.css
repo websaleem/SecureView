@@ -590,6 +590,14 @@ body {
   background: var(--sunken);
   cursor: default;
 }
+/* A day storage holds no record for. It still occupies a column so the axis is
+   always a fixed week, but it is drawn as a dashed stub so an absent day cannot
+   be mistaken for a day with very little activity. */
+.graph-col.is-empty {
+  background: transparent;
+  border-bottom: 1px dashed var(--line-strong);
+  border-radius: 0;
+}
 .graph-segment { width: 100%; transition: filter 0.15s ease; }
 .graph-col:hover .graph-segment { filter: brightness(1.12); }
 
@@ -617,6 +625,10 @@ body {
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .history-day:hover { border-color: var(--line-strong); background: var(--raised); }
+/* Recorded nothing, as opposed to recorded zero — kept visible rather than
+   omitted, so a gap in the week is stated instead of silently closed up. */
+.history-day.is-empty { background: transparent; border-style: dashed; }
+.history-day.is-empty .history-day-date { color: var(--ink-3); font-weight: 550; }
 .history-day-date { font-size: 12px; font-weight: 650; color: var(--ink); letter-spacing: -0.01em; }
 .history-day-stats { font-size: 10.5px; color: var(--ink-3); }
 
