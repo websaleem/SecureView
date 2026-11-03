@@ -1,12 +1,12 @@
 {
   "name": "secureview",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "SecureView Chrome extension \u2014 active browsing time tracking with AI site categorization.",
   "private": true,
   "scripts": {
     "build": "./scripts/build-zip.sh",
     "build:beta": "CHANNEL=beta ./scripts/build-zip.sh",
-    "test": "node test/verify-build.mjs && node test/verify-history-window.mjs"
+    "test": "node test/verify-build.mjs && node test/verify-history-window.mjs && node test/verify-time-accounting.mjs"
   },
   "license": "ISC"
 }

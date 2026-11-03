@@ -35,7 +35,7 @@
     <h1 style="margin:0;">SecureView – Privacy Policy</h1>
   </div>
   <p class="meta">
-    Last updated: September 20, 2026 &nbsp;·&nbsp; Version 1.0.6<br />
+    Last updated: November 3, 2026 &nbsp;·&nbsp; Version 1.0.7<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -116,7 +116,12 @@
     <li><strong>tabs</strong> — to detect the active tab URL and title when you switch tabs or navigate.</li>
     <li><strong>storage</strong> — to persist browsing data and settings locally.</li>
     <li><strong>alarms</strong> — to flush accumulated time to storage every 60 seconds.</li>
-    <li><strong>idle</strong> — to detect when you are inactive (threshold: 60 seconds) so idle time is not counted.</li>
+    <li><strong>idle</strong> — to detect when you have stopped using the computer, so time away is not counted.
+        The threshold is <strong>3 minutes</strong> without keyboard or mouse input. Because reading a page
+        produces no input at all, time keeps being counted past that point while the browser window still has
+        focus — for at most <strong>10 further minutes</strong>, after which the session is closed and nothing
+        more is recorded until you interact again. If the screen is locked, or the browser window loses focus,
+        counting stops immediately rather than using that allowance.</li>
     <li><strong>content scripts (all sites)</strong> — required to detect user activity on every page so idle time is not counted. The content script reads only the page title and the fact that activity occurred; it does not read or transmit page content.</li>
     <li><strong>host_permissions</strong> — limited to the single AWS CloudFront endpoint used for AI categorization. SecureView no longer requests access to all URLs.</li>
   </ul>

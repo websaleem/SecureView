@@ -18,15 +18,41 @@ let currentTabTitle = null;
 let sessionStart = null;
 let isWindowFocused = true;
 let isUserIdle = false;
+// When the system went idle while the window still had focus — the "probably
+// reading" window. null whenever input is recent or the user is known away.
+let unattendedSince = null;
 let stateLoaded = false;
 
 const SESSION_KEY = "sv_session";
-const IDLE_THRESHOLD_SECONDS = 60;
-// Upper bound on what a single flush may credit. The tick alarm runs every
-// minute, so anything much larger means the service worker was suspended or the
-// machine slept rather than that the user browsed continuously. Two minutes
-// leaves room for a late alarm without letting an eight-hour sleep through.
-const MAX_FLUSH_MS = 2 * 60 * 1000;
+
+// How long with no keyboard/mouse input before Chrome calls the system idle.
+//
+// This was 60s, which undercounted every reading session. chrome.idle measures
+// from the user's LAST INPUT, not from when the page opened, so the countdown
+// is already part-spent by the time a page finishes loading: a page that took
+// 5s to load froze its timer at 55s and never moved again, however long the
+// user kept reading. Reading produces no input at all, so a threshold this
+// short treats the most ordinary use of a browser as absence.
+const IDLE_THRESHOLD_SECONDS = 180;
+
+// Reading is not absence, but an abandoned laptop is. When the system goes idle
+// while the window still has focus, time keeps accruing for at most this long
+// before the session is closed anyway.
+//
+// So the error is bounded in both directions: a reader loses nothing, and a
+// walked-away machine over-credits by at most this much instead of by however
+// long it sat there. A locked screen stops immediately and never uses this.
+const MAX_UNATTENDED_MS = 10 * 60 * 1000;
+// Upper bound on what a single flush may credit, so a suspended worker or a
+// slept machine cannot dump hours onto whatever page was open.
+//
+// Derived from the idle threshold rather than hardcoded, because it must be
+// larger than it: until the idle event arrives the user is presumed present, so
+// one legitimate uninterrupted span can be as long as the whole threshold plus
+// however late the tick is. Hardcoded at two minutes against a three-minute
+// threshold, this silently truncated a minute off exactly the reading sessions
+// the threshold was raised to protect — caught by test/verify-time-accounting.mjs.
+const MAX_FLUSH_MS = (IDLE_THRESHOLD_SECONDS + 120) * 1000;
 const EXCLUDED_DOMAINS_KEY = "excluded_domains";
 const RETENTION_DAYS = 7;
 
@@ -100,6 +126,7 @@ async function loadState() {
         sessionStart = s.sessionStart ?? null;
         isWindowFocused = s.isWindowFocused ?? true;
         isUserIdle = s.isUserIdle ?? false;
+        unattendedSince = s.unattendedSince ?? null;
       }
       stateLoaded = true;
       Logger.debug(LOG, "State loaded", { currentUrl, isWindowFocused, isUserIdle });
@@ -110,7 +137,7 @@ async function loadState() {
 
 function persistState() {
   chrome.storage.session.set({
-    [SESSION_KEY]: { currentUrl, activeTabId, currentTabTitle, sessionStart, isWindowFocused, isUserIdle }
+    [SESSION_KEY]: { currentUrl, activeTabId, currentTabTitle, sessionStart, isWindowFocused, isUserIdle, unattendedSince }
   });
 }
 
@@ -205,13 +232,18 @@ function recomputeTotals(data) {
 
 // ─── Time accumulation ────────────────────────────────────────────────────────
 
-async function flushTime(url) {
+// `until` credits time only up to a given instant instead of to now. The
+// unattended cap needs that: when the deadline has passed, the seconds before
+// it were genuinely watched and the seconds after it were not, and the two must
+// not be credited together.
+async function flushTime(url, until = Date.now()) {
   if (!url || !sessionStart || isUserIdle || !isWindowFocused || isExcluded(url)) {
     Logger.debug(LOG, "Flush skipped", { url: url || "none", sessionStart, isUserIdle, isWindowFocused });
     return;
   }
 
-  const now = Date.now();
+  // Never credit the future, whatever the caller passed.
+  const now = Math.min(until, Date.now());
   const spanMs = now - sessionStart;
   if (spanMs <= 0) return;
 
@@ -307,6 +339,7 @@ async function endSession() {
   activeTabId = null;
   currentTabTitle = null;
   sessionStart = null;
+  unattendedSince = null;
   persistState();
 }
 
@@ -352,6 +385,7 @@ async function switchTo(url, tabId, title) {
     activeTabId = null;
     currentTabTitle = null;
     sessionStart = null;
+    unattendedSince = null;
     persistState();
     return;
   }
@@ -362,6 +396,8 @@ async function switchTo(url, tabId, title) {
   activeTabId = tabId;
   currentTabTitle = title || null;
   sessionStart = isUserIdle || !isWindowFocused ? null : Date.now();
+  // A new page is attended by definition — navigating to it was input.
+  unattendedSince = null;
   persistState();
 
   if (title) await syncTabTitle(url, title);
@@ -464,6 +500,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     await flushTime(currentUrl);
     isWindowFocused = false;
     sessionStart = null;
+    unattendedSince = null;
     persistState();
   } else {
     Logger.info(LOG, "Window gained focus — resuming");
@@ -487,17 +524,53 @@ chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
 chrome.idle.onStateChanged.addListener(async (state) => {
   await ready();
   Logger.info(LOG, `Idle state: ${state}`);
-  if (state === "idle" || state === "locked") {
+
+  // A locked screen is unambiguous: nobody is reading it. Stop at once.
+  if (state === "locked") {
     await flushTime(currentUrl);
     isUserIdle = true;
     sessionStart = null;
+    unattendedSince = null;
     persistState();
-  } else if (state === "active") {
-    isUserIdle = false;
-    if (currentUrl && isWindowFocused) {
-      sessionStart = Date.now();
-      persistState();
+    return;
+  }
+
+  if (state === "idle") {
+    // No input for IDLE_THRESHOLD_SECONDS. That is not the same as absence —
+    // reading generates no input — so if the window still has focus, keep
+    // counting and start the unattended clock instead. The alarm tick closes
+    // the session once MAX_UNATTENDED_MS has passed, which is what stops an
+    // abandoned machine from accruing all day.
+    //
+    // Flush first either way, so the time up to this point is banked even if
+    // the worker is torn down before the next tick.
+    await flushTime(currentUrl);
+    if (isWindowFocused && currentUrl) {
+      if (unattendedSince === null) {
+        unattendedSince = Date.now();
+        Logger.info(LOG, "System idle but window focused — still counting, unattended clock started");
+        persistState();
+      }
+      return;
     }
+    isUserIdle = true;
+    sessionStart = null;
+    unattendedSince = null;
+    persistState();
+    return;
+  }
+
+  if (state === "active") {
+    // Real input: whatever we assumed, the user is here.
+    const wasIdle = isUserIdle;
+    isUserIdle = false;
+    unattendedSince = null;
+    if (currentUrl && isWindowFocused && (wasIdle || !sessionStart)) {
+      // Only restart the clock if it had actually stopped. Resetting it while
+      // it was still running would discard the span since the last flush.
+      sessionStart = Date.now();
+    }
+    persistState();
   }
 });
 
@@ -527,7 +600,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await ready();
   Logger.debug(LOG, "Alarm tick");
   await ensureTracking();      // Re-establish tracking if SW was restarted
-  await flushTime(currentUrl); // Flush accumulated time to storage
+
+  // Close out a session the user has stopped attending. The deadline is
+  // credited exactly — seconds before it were watched, seconds after it were
+  // not — rather than crediting the whole span or discarding it.
+  const deadline = unattendedSince === null ? null : unattendedSince + MAX_UNATTENDED_MS;
+  if (deadline !== null && Date.now() >= deadline) {
+    Logger.info(LOG, `Unattended for ${MAX_UNATTENDED_MS / 60000} min — closing session`);
+    await flushTime(currentUrl, deadline);
+    isUserIdle = true;
+    sessionStart = null;
+    unattendedSince = null;
+    persistState();
+  } else {
+    await flushTime(currentUrl); // Flush accumulated time to storage
+  }
+
   await pruneOldData();        // Drop data_* keys past the retention window
 });
 
@@ -627,6 +715,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       Logger.debug(LOG, "USER_ACTIVE received from content script");
+      // In-page activity (including scrolling, which chrome.idle does not
+      // always see as system input) means the page is being attended, so the
+      // unattended clock restarts from zero rather than running down.
+      if (unattendedSince !== null) {
+        unattendedSince = null;
+        persistState();
+      }
       if (isUserIdle) {
         isUserIdle = false;
         if (currentUrl && isWindowFocused) {
