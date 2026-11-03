@@ -54,7 +54,16 @@ const MAX_UNATTENDED_MS = 10 * 60 * 1000;
 // the threshold was raised to protect — caught by test/verify-time-accounting.mjs.
 const MAX_FLUSH_MS = (IDLE_THRESHOLD_SECONDS + 120) * 1000;
 const EXCLUDED_DOMAINS_KEY = "excluded_domains";
-const RETENTION_DAYS = 7;
+// Today plus seven prior days — eight, not seven, because of the weekly report.
+//
+// A weekly report sent on Monday covers the PREVIOUS Monday 00:00 to Sunday
+// 24:00, which on the send day is "7 days ago" through "yesterday". At seven
+// days of retention the first day of that window — the previous Monday — was
+// pruned the very morning the report needed it, so every weekly report would
+// have quietly covered six days and under-reported by a seventh.
+//
+// website/privacy.html states this number; the two must change together.
+const RETENTION_DAYS = 8;
 
 // ─── Excluded domains (in-memory, synced from storage) ───────────────────────
 let _excludedDomains = new Set();
