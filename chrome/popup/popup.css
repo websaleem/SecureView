@@ -632,6 +632,14 @@ body {
 .history-day-date { font-size: 12px; font-weight: 650; color: var(--ink); letter-spacing: -0.01em; }
 .history-day-stats { font-size: 10.5px; color: var(--ink-3); }
 
+/* Verification state for email reports. Deliberately always visible rather
+   than only on error: "saved" and "confirmed" are different states, and the
+   gap between them is where a user would otherwise wait for mail forever. */
+.setting-status { font-size: 10.5px; margin-top: 5px; line-height: 1.5; }
+.setting-status.is-ok { color: #10b981; }
+.setting-status.is-pending { color: #f59e0b; }
+.setting-status.is-off { color: var(--ink-3); }
+
 /* ── Settings ─────────────────────────────────────────────────────────────── */
 .settings-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 14px; }
 

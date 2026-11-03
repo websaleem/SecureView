@@ -708,6 +708,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  // Starts email verification for an address the user just saved.
+  //
+  // Gated by isFromExtensionPage like the other privileged handlers: the content
+  // script runs on every page, and without this check any site's content-script
+  // context could make us mail an address of its choosing — the subscribe
+  // endpoint is rate limited per address, but it should never be reachable from
+  // a web page in the first place.
+  if (message.type === "SUBSCRIBE_REPORT_EMAIL") {
+    if (!isFromExtensionPage(sender)) {
+      Logger.warn(LOG, "Rejected SUBSCRIBE_REPORT_EMAIL from a non-extension sender");
+      sendResponse({ status: "forbidden" });
+      return true;
+    }
+    (async () => {
+      try {
+        const email = typeof message.email === "string" ? message.email.trim() : "";
+        if (!email) {
+          sendResponse({ status: "error" });
+          return;
+        }
+        sendResponse({ status: await subscribeReportEmail(email) });
+      } catch (e) {
+        Logger.warn(LOG, `Subscribe failed: ${e?.message}`);
+        sendResponse({ status: "error" });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === "CLEAR_TODAY") {
     if (!isFromExtensionPage(sender)) {
       Logger.warn(LOG, "Rejected CLEAR_TODAY from a non-extension sender");

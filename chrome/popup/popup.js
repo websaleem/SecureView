@@ -475,6 +475,33 @@ function renderExclusionList(domains, data) {
   });
 }
 
+// Shows where verification stands. Without this, a saved-but-unconfirmed
+// address looks identical to a working one and the user waits for mail that
+// is never going to arrive.
+async function paintReportStatus() {
+  const el = document.getElementById("report-status");
+  if (!el) return;
+  const stored = await new Promise((resolve) =>
+    chrome.storage.local.get(["report_state", "reportEmail"], resolve));
+  const email = (stored.reportEmail || "").trim();
+  const state = stored.report_state || {};
+
+  el.classList.remove("is-ok", "is-pending", "is-off");
+  if (!email) {
+    el.textContent = "Reports are off. Add an address to turn them on.";
+    el.classList.add("is-off");
+  } else if (state.subscribedEmail === email && state.status === "verified") {
+    el.textContent = "Address confirmed — reports are on.";
+    el.classList.add("is-ok");
+  } else if (state.subscribedEmail === email && state.status === "pending") {
+    el.textContent = "Waiting for you to confirm the link we emailed.";
+    el.classList.add("is-pending");
+  } else {
+    el.textContent = "Not confirmed yet — save the address to send a new link.";
+    el.classList.add("is-pending");
+  }
+}
+
 async function renderSettings(data) {
   const settings = await loadSettings();
   document.getElementById("setting-debug-log").checked = settings.debugLog;
@@ -490,6 +517,7 @@ async function renderSettings(data) {
       btn.setAttribute("aria-checked", String(on));
     });
   renderExclusionList(settings.excludedDomains, data);
+  await paintReportStatus();
 }
 
 // Takes the gap-filled window from buildDayWindow (oldest first), NOT the raw
@@ -772,7 +800,27 @@ async function init() {
     }
     try {
       await persistReportPrefs(email, currentFreq());
-      setReportMsg(email ? "Saved." : "Saved — reports off.", "ok");
+      if (!email) {
+        setReportMsg("Saved — reports off.", "ok");
+        await paintReportStatus();
+        return true;
+      }
+      // Saving an address is not consent to email it. Ask the background to
+      // start verification; nothing is ever sent until the link in that mail is
+      // clicked. It goes through the worker because the worker owns this
+      // install's client id and the host permission for the endpoint.
+      setReportMsg("Saved. Sending a confirmation email…", "ok");
+      const res = await chrome.runtime
+        .sendMessage({ type: "SUBSCRIBE_REPORT_EMAIL", email })
+        .catch(() => null);
+      if (res?.status === "pending") {
+        setReportMsg("Check your inbox and confirm the address.", "ok");
+      } else if (res?.status === "verified") {
+        setReportMsg("Confirmed — reports are on.", "ok");
+      } else {
+        setReportMsg("Saved, but the confirmation email could not be sent.", "error");
+      }
+      await paintReportStatus();
       return true;
     } catch (e) {
       setReportMsg("Could not save. Please try again.", "error");
