@@ -177,6 +177,59 @@ function harness() {
   check('no seconds lost to active events', h.seconds('google.com'), 300);
 }
 
+// ── 8. shouldTrack is an allowlist: only http/https is browsing. ───────────
+{
+  console.log('\n--- non-web schemes are not tracked ---');
+  for (const [url, tracked] of [
+    ['https://google.com/', true],
+    ['http://example.com/', true],
+    ['chrome://settings/', false],
+    ['chrome-untrusted://whatever/', false],
+    ['devtools://devtools/bundled/x.html', false],
+    ['data:text/html,<h1>hi</h1>', false],
+    ['blob:https://example.com/abc-123', false],
+    ['brave://settings/', false],
+    ['view-source:https://example.com/', false],
+    ['file:///Users/x/secret.html', false],
+    ['not a url at all', false],
+  ]) {
+    const h = harness();
+    await h.navigate(url);
+    h.advance(120); await h.tick();
+    let host = '';
+    try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+    const got = host ? h.seconds(host) : 0;
+    check(`${tracked ? 'tracks' : 'ignores'} ${url.slice(0, 38)}`, got > 0, tracked);
+  }
+}
+
+// ── 9. Category icons: no backend category falls through to the globe. ──────
+{
+  console.log('\n--- icon lookup for every category the backend can return ---');
+  const { readFileSync: rf } = await import('node:fs');
+  const vm = await import('node:vm');
+  const ictx = vm.createContext({
+    console, Object, Array, String, Number, Math, RegExp, JSON,
+    chrome: { storage: { local: { get: (k, cb) => cb({}) }, onChanged: { addListener() {} } }, runtime: {} },
+    Logger: { info() {}, warn() {}, debug() {}, error() {} },
+    getCFConfig: () => ({ url: '' }), AbortSignal: { timeout() {} }, fetch: async () => ({}),
+  });
+  vm.runInContext(rf('chrome/shared/categories.js', 'utf8'), ictx);
+  vm.runInContext(rf('chrome/shared/categorizer.js', 'utf8'), ictx);
+
+  const backend = [...rf('backend/lambda/bedrock/lambda_function.py', 'utf8')
+    .match(/CATEGORIES = \[(.*?)\]/s)[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
+  const generic = backend.filter(c => {
+    const r = vm.runInContext(`getIconForCategory(${JSON.stringify(c)})`, ictx);
+    return c !== 'Other' && r.icon === '🌐';
+  });
+  check('every category except "Other" has a real icon', generic, []);
+  const sports = vm.runInContext('getIconForCategory("Sports")', ictx);
+  check('Sports gets the trophy, not Entertainment\'s film', sports.icon, '🏆');
+  const esports = vm.runInContext('getIconForCategory("Esports")', ictx);
+  check('Esports still lands on Gaming', esports.icon, '🎮');
+}
+
 console.log();
 if (failures.length) {
   console.log(`${failures.length} FAILURE(S)`);

@@ -101,15 +101,25 @@ function isExcluded(url) {
 // not user-meaningful "browsing" and may carry sensitive context (file paths,
 // chrome:// settings) that shouldn't land in storage or be sent for
 // categorization.
+// An allowlist, not a denylist. The previous version named six schemes to
+// refuse and tracked everything else, which admitted `data:`, `blob:`,
+// `devtools://`, `chrome-untrusted://` and every other browser's internal
+// scheme (brave://, opera://, vivaldi://, arc://) by omission — a list of
+// exceptions can only ever be as complete as the day it was written.
+//
+// Ordinary browsing is http and https. Anything else is not a web page the user
+// chose to spend time on, so it is not tracked. An unparseable URL is refused
+// here rather than later: flushTime would have had to discard the span after
+// sessionStart had already advanced.
 function shouldTrack(url) {
   if (!url) return false;
-  if (url.startsWith("chrome://")) return false;
-  if (url.startsWith("chrome-extension://")) return false;
-  if (url.startsWith("file://")) return false;
-  if (url.startsWith("about:")) return false;
-  if (url.startsWith("edge://")) return false;
-  if (url.startsWith("view-source:")) return false;
-  return true;
+  let protocol;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return false;
+  }
+  return protocol === "http:" || protocol === "https:";
 }
 
 // ─── Session state persistence (survives SW restarts within browser session) ──

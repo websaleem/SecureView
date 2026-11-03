@@ -218,9 +218,18 @@ function getIconForCategory(categoryName) {
 
   const lower = categoryName.toLowerCase();
   const ICON_MAP = [
+    // Two categories the backend can return had no row at all and fell
+    // through to the generic globe. First in the list because their
+    // keywords appear in no other category name, and a safety label
+    // should not be at the mercy of a later collision.
+    { keywords: ["malware", "phishing", "scam", "fraud"],                                                                icon: "🚨", color: "#D32F2F" },
+    { keywords: ["personal"],                                                                                            icon: "👤", color: "#5D6D7E" },
     { keywords: ["finance", "bank", "invest", "crypto", "stock", "money", "insurance", "loan", "mortgage", "accounting"], icon: "💰", color: "#27AE60" },
     { keywords: ["news", "media", "press", "journal", "magazine", "blog", "report"],                                       icon: "📰", color: "#E74C3C" },
-    { keywords: ["entertain", "movie", "film", "music", "stream", "video", "tv", "show", "sport", "theatre"],             icon: "🎬", color: "#9B59B6" },
+    // "sport" deliberately absent: it shadowed the dedicated Sports entry
+    // further down, because the first matching row wins. "Esports" still
+    // lands on Gaming, which is matched earlier than Sports.
+    { keywords: ["entertain", "movie", "film", "music", "stream", "video", "tv", "show", "theatre"],                      icon: "🎬", color: "#9B59B6" },
     { keywords: ["social", "community", "forum", "chat", "message", "dating"],                                            icon: "💬", color: "#3498DB" },
     { keywords: ["travel", "hotel", "flight", "vacation", "trip", "tour", "airline", "airport", "cruise"],                icon: "✈️", color: "#1ABC9C" },
     { keywords: ["shop", "store", "retail", "ecommerce", "marketplace", "fashion", "clothing", "apparel"],                icon: "🛒", color: "#E67E22" },
