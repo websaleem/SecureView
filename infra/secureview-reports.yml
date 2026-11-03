@@ -14,15 +14,20 @@ Description: >-
 # classifier: POST only, and a JSON body carrying a `hostname`. Reports need GET
 # for the confirmation and unsubscribe links, and a different body shape.
 #
-# So reports take the pattern used elsewhere instead: a Lambda Function URL with
-# AuthType AWS_IAM, reached through CloudFront Origin Access Control, which
-# signs origin requests itself. Nothing here touches the classifier path.
+# This WAS built on a Lambda Function URL with CloudFront Origin Access Control,
+# so that nothing had to touch the signer. That does not work, and the reason is
+# worth keeping: OAC does not sign the request BODY for a Lambda function URL.
+# Measured against dev — an empty-body POST reached the handler, a POST of "{}"
+# came back 403 signature mismatch. A report is a body, so the path was a dead
+# end regardless of how the Lambda was written.
 #
-# TWO INVOKE PERMISSIONS PER FUNCTION, not one. An OAC-signed request is
-# authorized twice — lambda:InvokeFunctionUrl at the URL front door, and
-# lambda:InvokeFunction behind it. With only the first, every request returns
-# 403 before the handler runs and it looks exactly like a signing failure.
-# Learned the hard way on another project in this account.
+# So reports go through API Gateway with AWS_IAM, reached through the same
+# Lambda@Edge signer as the classifier, which signs bodies. The signer now has
+# an explicit allowlist of path-and-method pairs and three signing modes; see
+# backend/lambda/lambda_function.py and test/test_edge_signer.py.
+#
+# Routes are attached to the API created by the secureview-api stack rather than
+# a second API, so both share one origin, one stage and one signer association.
 # ─────────────────────────────────────────────────────────────────────────────
 
 Parameters:
@@ -38,12 +43,15 @@ Parameters:
     Type: String
     Description: S3 key of the report Lambda package (content-addressed).
 
-  DistributionId:
+  ApiId:
     Type: String
     Description: >-
-      The CloudFront distribution permitted to invoke the Function URL. The
-      distribution itself is not managed here — it also fronts the marketing
-      site — only the permissions that name it.
+      The REST API created by the secureview-api stack. Report routes are added
+      to it so they share its stage and its Lambda@Edge signer association.
+
+  ApiRootResourceId:
+    Type: String
+    Description: Root resource id of that API.
 
   ReportSender:
     Type: String
@@ -162,60 +170,64 @@ Resources:
           REPORT_SENDER: !Ref ReportSender
           SITE_BASE_URL: !Ref SiteBaseUrl
 
-  # ───────── Function URL ─────────
-  # AWS_IAM, never NONE. This is a public DNS name; IAM auth is the only thing
-  # stopping direct invocation that bypasses CloudFront, the WAF and the
-  # content-type guard.
-  ReportFunctionUrl:
-    Type: AWS::Lambda::Url
-    DependsOn: ReportFunction
+  # ───────── API Gateway routes ─────────
+  # Added to the classifier's API (passed in as ApiId) so reports share its
+  # stage, its origin and its signer association. A second API would mean a
+  # second origin and a second behaviour for no benefit.
+  ReportResource:
+    Type: AWS::ApiGateway::Resource
     Properties:
-      # !Sub rather than !GetAtt: a resource attribute is opaque while
-      # CloudFormation is planning, so it reports TargetFunctionArn as a
-      # possible change with RequiresRecreation: Always on every deploy — and
-      # recreating a Function URL mints a new hostname while the distribution
-      # still points at the old one.
-      TargetFunctionArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:secureview-report-${Environment}"
-      AuthType: AWS_IAM
+      RestApiId: !Ref ApiId
+      ParentId: !Ref ApiRootResourceId
+      PathPart: report
 
-  ReportInvokeUrlPermission:
-    Type: AWS::Lambda::Permission
-    DependsOn: ReportFunction
+  # One resource per route rather than a {proxy+}: the signer only signs the
+  # five paths it knows, so a proxy would accept nothing extra, and naming them
+  # here keeps the deployable surface identical to the signed surface.
+  ReportRouteResources:
+    Type: AWS::ApiGateway::Resource
     Properties:
-      Action: lambda:InvokeFunctionUrl
-      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:secureview-report-${Environment}"
-      Principal: cloudfront.amazonaws.com
-      FunctionUrlAuthType: AWS_IAM
-      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+      RestApiId: !Ref ApiId
+      ParentId: !Ref ReportResource
+      PathPart: "{action}"
 
-  # The second of the pair. See the header: without this every request 403s.
+  ReportMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiId
+      ResourceId: !Ref ReportRouteResources
+      # ANY: subscribe/status/send are POST, confirm/unsubscribe are GET. Which
+      # methods are actually permitted is decided by the signer's allowlist —
+      # an unsigned request never reaches here at all.
+      HttpMethod: ANY
+      AuthorizationType: AWS_IAM
+      RequestParameters:
+        "method.request.path.action": true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ReportFunction.Arn}/invocations"
+
   ReportInvokePermission:
     Type: AWS::Lambda::Permission
-    DependsOn: ReportFunction
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:secureview-report-${Environment}"
-      Principal: cloudfront.amazonaws.com
-      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+      FunctionName: !GetAtt ReportFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/report/*"
 
-  # ───────── Origin Access Control ─────────
-  # SigV4-signs every origin request so the IAM-authed Function URL accepts it.
-  ReportOAC:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: !Sub "secureview-report-oac-${Environment}"
-        OriginAccessControlOriginType: lambda
-        SigningBehavior: always
-        SigningProtocol: sigv4
+  # NO Deployment RESOURCE HERE, deliberately.
+  #
+  # A method added to an existing API does not reach traffic until the stage is
+  # redeployed, and the stage belongs to the secureview-api stack. Creating a
+  # Deployment here would succeed and change nothing: the stage would keep
+  # serving the deployment it already points at, and the routes would 403 or 404
+  # with the stack reporting success. scripts/deploy-reports.sh calls
+  # `apigateway create-deployment --stage-name` after this stack converges,
+  # which is the step that actually publishes them.
 
 Outputs:
   ReportFunctionName:
     Value: !Ref ReportFunction
-  ReportFunctionUrl:
-    Description: Wire as the CloudFront /report/* origin, with ReportOAC attached
-    Value: !GetAtt ReportFunctionUrl.FunctionUrl
-  ReportOACId:
-    Value: !Ref ReportOAC
   SubscribersTableName:
     Value: !Ref SubscribersTable

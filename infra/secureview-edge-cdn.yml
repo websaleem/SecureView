@@ -176,7 +176,24 @@ Resources:
               - Sid: InvokeApi
                 Effect: Allow
                 Action: execute-api:Invoke
-                Resource: !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/POST/categorize"
+                # Enumerated per route and per method, not */*. The signer will
+                # only sign these paths, so anything wider grants reach the
+                # function cannot use — and if the signer is ever tricked into
+                # signing something else, this is the backstop that still
+                # refuses it.
+                #
+                # The report routes are split by method on purpose: subscribe,
+                # status and send are POSTs from the extension, while confirm
+                # and unsubscribe are GETs from a mail client. Granting GET on
+                # /send, or POST on /confirm, would permit combinations no
+                # caller needs.
+                Resource:
+                  - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/POST/categorize"
+                  - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/POST/report/subscribe"
+                  - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/POST/report/status"
+                  - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/POST/report/send"
+                  - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/GET/report/confirm"
+                  - !Sub "arn:aws:execute-api:*:${AWS::AccountId}:*/${ApiStageName}/GET/report/unsubscribe"
 
   EdgeFunction:
     Type: AWS::Lambda::Function

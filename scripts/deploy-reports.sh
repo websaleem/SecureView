@@ -52,6 +52,20 @@ if [[ -z "$DIST" ]]; then
 fi
 
 ARTIFACTS="secureview-artifacts-${ACCOUNT}-${REGION}"
+API_STACK="secureview-api-${ENV}"
+
+# Report routes are added to the classifier's API so both share one origin, one
+# stage and one Lambda@Edge signer association.
+API_ID=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$API_STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiId'].OutputValue" --output text 2>/dev/null || true)
+API_STAGE=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$API_STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiStageName'].OutputValue" --output text 2>/dev/null || true)
+if [[ -z "$API_ID" || "$API_ID" == "None" ]]; then
+  echo "FATAL: $API_STACK has no ApiId output — deploy the backend first" >&2
+  exit 1
+fi
+API_ROOT=$(aws apigateway get-resources --region "$REGION" --rest-api-id "$API_ID" \
+  --query "items[?path=='/'].id" --output text)
 
 say() { printf '\n== %s\n' "$1"; }
 
@@ -59,6 +73,7 @@ say "Preflight"
 echo "  account:      $ACCOUNT"
 echo "  environment:  $ENV"
 echo "  distribution: $DIST"
+echo "  shared api:   $API_ID (stage $API_STAGE, root $API_ROOT)"
 echo "  link base:    $SITE_BASE"
 python3 -m py_compile backend/lambda/report/lambda_function.py
 echo "  report source compiles: ok"
@@ -112,22 +127,28 @@ aws cloudformation deploy \
     Environment="$ENV" \
     ArtifactBucket="$ARTIFACTS" \
     ReportArtifactKey="$key" \
-    DistributionId="$DIST" \
+    ApiId="$API_ID" \
+    ApiRootResourceId="$API_ROOT" \
     SiteBaseUrl="$SITE_BASE"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
 }
-FN_URL=$(out ReportFunctionUrl)
-OAC_ID=$(out ReportOACId)
-TABLE=$(out SubscribersTableName)
-echo "  function url: $FN_URL"
-echo "  oac:          $OAC_ID"
-echo "  table:        $TABLE"
+echo "  function: $(out ReportFunctionName)"
+echo "  table:    $(out SubscribersTableName)"
+
+say "Publishing the stage"
+# CloudFormation cannot do this: the stage belongs to $API_STACK, so a
+# Deployment created by this stack would change nothing and the new routes would
+# keep 404ing with every stack reporting success.
+aws apigateway create-deployment --region "$REGION" \
+  --rest-api-id "$API_ID" --stage-name "$API_STAGE" \
+  --description "report routes ${key}" \
+  --query '{id:id,created:createdDate}' --output json | sed 's/^/  /'
 
 say "CloudFront: /report/* behaviour on $DIST"
-python3 scripts/attach-report-behaviour.py "$DIST" "$FN_URL" "$OAC_ID"
+python3 scripts/attach-report-behaviour.py "$DIST"
 
 say "Done"
 echo "  Reports are reachable at ${SITE_BASE}/report/*"

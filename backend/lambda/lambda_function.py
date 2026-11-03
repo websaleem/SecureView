@@ -13,9 +13,42 @@ logger.setLevel(logging.INFO)
 # Lambda@Edge cannot carry environment variables, so anything configurable has
 # to be a constant here and redeployed with the function.
 #
-# /report was removed along with the Cognito login flow; /categorize is the only
-# path this distribution serves.
-KNOWN_API_PATHS = ("/categorize",)
+# An explicit allowlist of path AND method, not a prefix match. Every entry here
+# is a route that exists behind API Gateway; anything else is refused before a
+# signature is computed, so a typo in a behaviour cannot turn this into an open
+# signing proxy for the whole API.
+#
+# WHY REPORTS COME THROUGH HERE. They were first built on a Lambda function URL
+# with CloudFront OAC, which signs origin requests without needing this
+# function. That does not work: OAC does not sign the request BODY for a Lambda
+# function URL, so anything carrying one fails SigV4 at the URL's front door.
+# Measured against dev — an empty-body POST reached the handler, a POST of "{}"
+# came back 403 signature mismatch. This function signs the body, which is
+# exactly what /categorize already depends on, so reports use it too.
+CATEGORIZE_PATH = "/categorize"
+
+# POST with a JSON body, from the extension's service worker.
+REPORT_POST_PATHS = ("/report/subscribe", "/report/status", "/report/send")
+
+# GET with no body, from a browser: the links people click in their email.
+REPORT_GET_PATHS = ("/report/confirm", "/report/unsubscribe")
+
+
+def route_kind(uri, method):
+    """Which kind of request this is, or None if it is not allowed.
+
+    Returned as a kind rather than a boolean because the three differ in how
+    they must be signed: the classifier's body is re-serialised and validated,
+    a report body is passed through untouched, and a report link has no body at
+    all and must be signed over an empty payload.
+    """
+    if uri == CATEGORIZE_PATH:
+        return "categorize" if method == "POST" else None
+    if uri in REPORT_POST_PATHS:
+        return "report_post" if method == "POST" else None
+    if uri in REPORT_GET_PATHS:
+        return "report_get" if method == "GET" else None
+    return None
 
 
 def error_response(status, message):
@@ -44,12 +77,16 @@ def lambda_handler(event, context):
     # the classifier through its visitors' browsers, which also sidesteps the
     # WAF's per-IP rate limit. OPTIONS now falls through to the 405 below.
 
-    if uri not in KNOWN_API_PATHS:
+    kind = route_kind(uri, method)
+    if kind is None:
+        # 404 for a path nobody serves, 405 when the path exists but not with
+        # this method — a GET to /categorize is a different mistake from a GET
+        # to /nonsense, and saying so costs nothing.
+        known = (uri == CATEGORIZE_PATH or uri in REPORT_POST_PATHS or uri in REPORT_GET_PATHS)
+        if known:
+            return error_response("405", "Method Not Allowed")
         logger.warning("Rejected request for unknown path")
         return error_response("404", "Not Found")
-
-    if method != "POST":
-        return error_response("405", "Method Not Allowed")
 
     origin_custom = cf_request.get("origin", {}).get("custom", {})
     api_host = origin_custom.get("domainName", "")
@@ -72,7 +109,10 @@ def lambda_handler(event, context):
     origin_path = origin_custom.get("path", "") or ""
     signed_path = f"{origin_path}{uri}"
 
-    # ── Body decoding ──────────────────────────────────────────────────────
+    # ── Body ───────────────────────────────────────────────────────────────
+    # Whatever is signed must be byte-identical to what CloudFront forwards, so
+    # every path with a body replaces it explicitly rather than relying on the
+    # original bytes surviving unchanged.
     body_obj = cf_request.get("body") or {}
     raw = body_obj.get("data", "")
     body = (
@@ -81,28 +121,55 @@ def lambda_handler(event, context):
         else (raw or "")
     )
 
-    # ── Parse and validate ─────────────────────────────────────────────────
-    # Deliberately no logging of the body, hostname, or title: these are the
-    # user's browsing history, and CloudWatch is not where it belongs.
-    try:
-        parsed = json.loads(body) if body else {}
-    except json.JSONDecodeError:
-        logger.error("Request body is not valid JSON")
-        return error_response("400", "Bad Request - invalid body")
+    # Lambda@Edge hands over at most 1 MB of body and flags the rest as
+    # truncated. Signing a truncated body produces a signature over bytes the
+    # origin will never see, which arrives as an unexplainable 403 — so refuse
+    # it with something that names the cause instead.
+    if body_obj.get("inputTruncated"):
+        logger.error("Request body was truncated by Lambda@Edge; refusing to sign")
+        return error_response("413", "Payload Too Large")
 
-    if not isinstance(parsed, dict):
-        return error_response("400", "Bad Request - invalid body")
+    if kind == "report_get":
+        # No body, and no Content-Type: the signature must cover exactly the
+        # headers sent, and inventing one here would break it.
+        clean_body = ""
+        content_type = None
+    elif kind == "categorize":
+        # Deliberately no logging of the body, hostname, or title: these are the
+        # user's browsing history, and CloudWatch is not where it belongs.
+        try:
+            parsed = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            logger.error("Request body is not valid JSON")
+            return error_response("400", "Bad Request - invalid body")
 
-    hostname = parsed.get("hostname")
-    if not hostname or not isinstance(hostname, str):
-        logger.warning("Request rejected: missing hostname")
-        return error_response("400", "Bad Request - hostname is required")
+        if not isinstance(parsed, dict):
+            return error_response("400", "Bad Request - invalid body")
 
-    clean_body = json.dumps(parsed)
-    cf_request["body"] = {"action": "replace", "encoding": "text", "data": clean_body}
+        hostname = parsed.get("hostname")
+        if not hostname or not isinstance(hostname, str):
+            logger.warning("Request rejected: missing hostname")
+            return error_response("400", "Bad Request - hostname is required")
 
-    ct_headers = cf_request.get("headers", {}).get("content-type", [])
-    content_type = ct_headers[0]["value"] if ct_headers else "application/json"
+        clean_body = json.dumps(parsed)
+    else:
+        # report_post. The body passes through untouched: its shape is the
+        # report Lambda's business, and re-serialising it here would mean this
+        # function had to know and preserve that schema. It is still replaced,
+        # so the forwarded bytes are the bytes that were signed.
+        if not body:
+            return error_response("400", "Bad Request - body is required")
+        clean_body = body
+
+    if clean_body:
+        cf_request["body"] = {"action": "replace", "encoding": "text", "data": clean_body}
+
+    # Resolved once, after the per-kind branches above. The report_get branch
+    # has already set this to None and must keep it: a GET is signed over no
+    # Content-Type at all, and supplying one would invalidate the signature.
+    if kind != "report_get":
+        ct_headers = cf_request.get("headers", {}).get("content-type", [])
+        content_type = ct_headers[0]["value"] if ct_headers else "application/json"
 
     credentials = Credentials(
         access_key=os.environ["AWS_ACCESS_KEY_ID"],
@@ -114,14 +181,15 @@ def lambda_handler(event, context):
     if querystring:
         url = f"{url}?{querystring}"
 
+    sign_headers = {"Host": api_host}
+    if content_type is not None:
+        sign_headers["Content-Type"] = content_type
+
     aws_request = AWSRequest(
         method=method,
         url=url,
         data=clean_body.encode("utf-8"),
-        headers={
-            "Host": api_host,
-            "Content-Type": content_type,
-        },
+        headers=sign_headers,
     )
 
     SigV4Auth(credentials, "execute-api", api_region).add_auth(aws_request)
@@ -135,7 +203,11 @@ def lambda_handler(event, context):
         ]
 
     cf_request["headers"]["host"] = [{"key": "Host", "value": api_host}]
-    cf_request["headers"]["content-type"] = [{"key": "Content-Type", "value": content_type}]
+    if content_type is not None:
+        cf_request["headers"]["content-type"] = [{"key": "Content-Type", "value": content_type}]
+    else:
+        # A signature computed without Content-Type must not travel with one.
+        cf_request["headers"].pop("content-type", None)
 
     logger.info("Forwarding signed request to %s (region %s)", signed_path, api_region)
 
