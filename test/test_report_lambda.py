@@ -140,8 +140,10 @@ def ctx():
     return types.SimpleNamespace(aws_request_id="test")
 
 
-def call(method, path, body=None, query=None):
+def call(method, path, body=None, query=None, content_type="application/json"):
     event = {"httpMethod": method, "path": path}
+    if content_type is not None:
+        event["headers"] = {"Content-Type": content_type}
     if body is not None:
         event["body"] = json.dumps(body)
     if query:
@@ -182,7 +184,7 @@ check("verification goes to the subscribed address",
 check_true("subject is about confirming",
            "Confirm" in sent["Content"]["Simple"]["Subject"]["Data"])
 check_true("body carries a confirm link",
-           "report-confirm.html?token=" in sent["Content"]["Simple"]["Body"]["Html"]["Data"])
+           "/report/confirm?token=" in sent["Content"]["Simple"]["Body"]["Html"]["Data"])
 
 print("\n--- still unconfirmed: a report must not go out ---")
 FAKE_SES.sent.clear()
@@ -216,7 +218,7 @@ check("one email", len(FAKE_SES.sent), 1)
 body_html = FAKE_SES.sent[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
 check_true("report lists the domain", "github.com" in body_html)
 check_true("duration rendered, not raw seconds", "10m" in body_html)
-check_true("unsubscribe link present", "report-unsubscribe.html?token=" in body_html)
+check_true("unsubscribe link present", "/report/unsubscribe?token=" in body_html)
 
 print("\n--- the same window cannot be sent twice ---")
 FAKE_SES.sent.clear()
@@ -300,11 +302,32 @@ check("the row is deleted", "owner@example.com" in FAKE_DDB.deleted, True)
 code, page = call("GET", "/report/unsubscribe", query={"token": "bogus-token"})
 check_true("an unknown token gives the same page", "unsubscribed" in str(page).lower())
 
+print("\n--- POST routes require application/json (the no-cors defence) ---")
+FAKE_SES.sent.clear()
+for ct, want in [
+    ("application/json", 202),
+    ("application/json; charset=utf-8", 202),
+    ("text/plain", 415),
+    ("application/x-www-form-urlencoded", 415),
+    ("multipart/form-data", 415),
+    (None, 415),
+]:
+    code, _ = call("POST", "/report/subscribe",
+                   {"email": "ct@example.com", "clientId": "d" * 32}, content_type=ct)
+    check(f"content-type {ct!r} -> {want}", code, want)
+check("only the two application/json attempts produced mail",
+      sum(1 for d in FAKE_SES.sent
+          if d["Destination"]["ToAddresses"] == ["ct@example.com"]), 2)
+# GET links must still work without a content type.
+code, page = call("GET", "/report/confirm", query={"token": "nope"}, content_type=None)
+check("GET confirm is not blocked by the gate", code, 200)
+
 print("\n--- unknown routes ---")
 check("unknown path 404s", call("POST", "/report/whatever", {})[0], 404)
 check("wrong method 404s", call("GET", "/report/send")[0], 404)
 check("malformed JSON is a 400", rpt.lambda_handler(
-    {"httpMethod": "POST", "path": "/report/subscribe", "body": "{not json"}, ctx())["statusCode"], 400)
+    {"httpMethod": "POST", "path": "/report/subscribe",
+     "headers": {"Content-Type": "application/json"}, "body": "{not json"}, ctx())["statusCode"], 400)
 
 print()
 if FAILURES:

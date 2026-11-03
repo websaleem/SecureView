@@ -1,0 +1,221 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SecureView email reports — subscriber table, relay Lambda, and the
+  CloudFront-signed Function URL it is reached through. Region: ap-southeast-2.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A SEPARATE STACK FROM secureview-api, deliberately.
+#
+# That stack is the classifier: API Gateway with AWS_IAM, reached through a
+# Lambda@Edge function that signs each request. Reports cannot use that path
+# without rewriting the signer, which is the most delicate component in the
+# pipeline — it is versioned, it propagates on CloudFront's schedule, and it is
+# what makes categorisation work at all. Its validation is specific to the
+# classifier: POST only, and a JSON body carrying a `hostname`. Reports need GET
+# for the confirmation and unsubscribe links, and a different body shape.
+#
+# So reports take the pattern used elsewhere instead: a Lambda Function URL with
+# AuthType AWS_IAM, reached through CloudFront Origin Access Control, which
+# signs origin requests itself. Nothing here touches the classifier path.
+#
+# TWO INVOKE PERMISSIONS PER FUNCTION, not one. An OAC-signed request is
+# authorized twice — lambda:InvokeFunctionUrl at the URL front door, and
+# lambda:InvokeFunction behind it. With only the first, every request returns
+# 403 before the handler runs and it looks exactly like a signing failure.
+# Learned the hard way on another project in this account.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket holding the packaged Lambda zip.
+
+  ReportArtifactKey:
+    Type: String
+    Description: S3 key of the report Lambda package (content-addressed).
+
+  DistributionId:
+    Type: String
+    Description: >-
+      The CloudFront distribution permitted to invoke the Function URL. The
+      distribution itself is not managed here — it also fronts the marketing
+      site — only the permissions that name it.
+
+  ReportSender:
+    Type: String
+    Default: SecureView <info@websaleem.com>
+    Description: >-
+      From address. Send-only: nothing reads replies, and both emails say so.
+      The domain must be a verified SES identity in this region.
+
+  SiteBaseUrl:
+    Type: String
+    Description: >-
+      Origin the confirmation and unsubscribe links point at, e.g.
+      https://dev.secureview.websaleem.com. Must be the environment the user is
+      actually running, or the link in their mail lands on the wrong site.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Resources:
+  # ───────── Subscribers ─────────
+  # One row per address. Report contents are never stored — composed, sent,
+  # dropped. What persists is the address, whether it was confirmed, the
+  # install's client secret, and the last window sent per frequency.
+  SubscribersTable:
+    Type: AWS::DynamoDB::Table
+    # Retained: this table is the record of who consented. Losing it would mean
+    # silently re-mailing people who had unsubscribed, or dropping subscriptions
+    # with no way to tell which.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "secureview-report-subscribers-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      # Unconfirmed rows carry a ttl and expire; confirming removes it, so a
+      # confirmed subscription never disappears on its own.
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  ReportLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/secureview-report-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ReportRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "secureview-report-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: report-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/secureview-report-${Environment}:*"
+              - Sid: Subscribers
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                Resource: !GetAtt SubscribersTable.Arn
+              # Scoped to the one identity, so a bug here cannot send as any
+              # other verified domain in the account. FromAddress is pinned too:
+              # ses:FromAddress restricts which sender the role may use even
+              # within that identity.
+              - Sid: SendAsSecureView
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                Resource:
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/websaleem.com"
+                Condition:
+                  StringEquals:
+                    "ses:FromAddress": "info@websaleem.com"
+
+  ReportFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ReportLogGroup
+    Properties:
+      FunctionName: !Sub "secureview-report-${Environment}"
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt ReportRole.Arn
+      Timeout: 20
+      MemorySize: 256
+      Architectures: [x86_64]
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ReportArtifactKey
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          REPORT_SENDER: !Ref ReportSender
+          SITE_BASE_URL: !Ref SiteBaseUrl
+
+  # ───────── Function URL ─────────
+  # AWS_IAM, never NONE. This is a public DNS name; IAM auth is the only thing
+  # stopping direct invocation that bypasses CloudFront, the WAF and the
+  # content-type guard.
+  ReportFunctionUrl:
+    Type: AWS::Lambda::Url
+    DependsOn: ReportFunction
+    Properties:
+      # !Sub rather than !GetAtt: a resource attribute is opaque while
+      # CloudFormation is planning, so it reports TargetFunctionArn as a
+      # possible change with RequiresRecreation: Always on every deploy — and
+      # recreating a Function URL mints a new hostname while the distribution
+      # still points at the old one.
+      TargetFunctionArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:secureview-report-${Environment}"
+      AuthType: AWS_IAM
+
+  ReportInvokeUrlPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: ReportFunction
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:secureview-report-${Environment}"
+      Principal: cloudfront.amazonaws.com
+      FunctionUrlAuthType: AWS_IAM
+      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+
+  # The second of the pair. See the header: without this every request 403s.
+  ReportInvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: ReportFunction
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:secureview-report-${Environment}"
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+
+  # ───────── Origin Access Control ─────────
+  # SigV4-signs every origin request so the IAM-authed Function URL accepts it.
+  ReportOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "secureview-report-oac-${Environment}"
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+Outputs:
+  ReportFunctionName:
+    Value: !Ref ReportFunction
+  ReportFunctionUrl:
+    Description: Wire as the CloudFront /report/* origin, with ReportOAC attached
+    Value: !GetAtt ReportFunctionUrl.FunctionUrl
+  ReportOACId:
+    Value: !Ref ReportOAC
+  SubscribersTableName:
+    Value: !Ref SubscribersTable

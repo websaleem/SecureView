@@ -473,7 +473,7 @@ def _subscribe(body):
         # hit its limit is not something a caller needs to learn.
         return _resp(202, {"status": "pending"})
 
-    confirm_url = f"{SITE_BASE}/report-confirm.html?{urlencode({'token': confirm_token})}"
+    confirm_url = f"{SITE_BASE}/report/confirm?{urlencode({'token': confirm_token})}"
     _send_email(
         email,
         "Confirm your SecureView email reports",
@@ -591,7 +591,7 @@ def _send(body):
         return _resp(429, {"status": "rate_limited"})
 
     unsub_token = (row.get("unsubToken") or {}).get("S", "")
-    unsub_url = f"{SITE_BASE}/report-unsubscribe.html?{urlencode({'token': unsub_token})}"
+    unsub_url = f"{SITE_BASE}/report/unsubscribe?{urlencode({'token': unsub_token})}"
     subject, html_body, text_body = _render_email(report, unsub_url)
 
     try:
@@ -656,6 +656,28 @@ def lambda_handler(event, context):
     try:
         body = {}
         if method == "POST":
+            # Require application/json on the POST routes, enforced here rather
+            # than at the edge.
+            #
+            # The /categorize behaviour has a CloudFront function demanding
+            # exactly this, but it cannot be reused on /report/*: the
+            # confirmation and unsubscribe links are browser GETs and the guard
+            # would reject them. So the check moves inside, where GET and POST
+            # can be told apart.
+            #
+            # It matters for the same reason it did there. A cross-origin
+            # no-cors fetch may only send a CORS-safelisted content type —
+            # text/plain, multipart/form-data, x-www-form-urlencoded — never
+            # application/json. Asking for it leaves no-cors mode, which forces
+            # a preflight that fails because nothing here answers CORS. Without
+            # this, any web page could make us mail a verification link to an
+            # address of its choosing from a visitor's browser.
+            headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+            media_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+            if media_type != "application/json":
+                log.warning(json.dumps({"event": "rejected_media_type", "route": route}))
+                return _resp(415, {"error": "content-type must be application/json"})
+
             raw = event.get("body") or "{}"
             if event.get("isBase64Encoded"):
                 raw = base64.b64decode(raw).decode("utf-8", errors="replace")
