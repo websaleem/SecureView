@@ -35,7 +35,7 @@
     <h1 style="margin:0;">SecureView – Privacy Policy</h1>
   </div>
   <p class="meta">
-    Last updated: November 3, 2026 &nbsp;·&nbsp; Version 1.0.7<br />
+    Last updated: November 3, 2026 &nbsp;·&nbsp; Version 1.1.0<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -100,10 +100,52 @@
 
   <h2>3a. Email Reports</h2>
   <p>
-    Email reports are <strong>not currently active</strong>. The settings panel lets you save
-    an email address and a delivery frequency, but those values are stored only in
-    <code>chrome.storage.local</code> on your own device — nothing is transmitted, and no
-    report is sent. If and when delivery is switched on, this policy will be updated first.
+    Email reports are <strong>off unless you turn them on</strong>, and turning them on takes two
+    deliberate steps: entering an address in Settings, and then clicking a confirmation link we
+    email to that address. Until that link is clicked, nothing is ever sent to it. Leaving the
+    address blank keeps reports off entirely.
+  </p>
+  <p>
+    <strong>This is the one feature that sends your browsing data off your device in bulk.</strong>
+    Everywhere else, this policy describes single-site classification requests. A report is
+    different: when one is sent, the following leaves your device and is transmitted to our
+    backend, which composes the email.
+  </p>
+  <ul>
+    <li>Every domain you visited in the reporting period, with the seconds spent on each</li>
+    <li>The category assigned to each of those domains</li>
+    <li>Totals per category, and how many days in the period had any activity</li>
+    <li>The email address you confirmed</li>
+  </ul>
+  <p>
+    Page titles and full URLs are <strong>not</strong> included in a report — domain names only.
+  </p>
+  <p><strong>What each report covers:</strong></p>
+  <ul>
+    <li><strong>Daily</strong> — yesterday, midnight to midnight in your local timezone.</li>
+    <li><strong>Weekly</strong> — sent on a Monday, covering the previous Monday 00:00 through
+        Sunday 24:00: seven whole days in your local timezone.</li>
+  </ul>
+  <p>
+    Reports are sent in the morning, while your browser is running. SecureView cannot send email
+    when Chrome is closed, so if the browser is not open during the morning window that report is
+    <strong>skipped</strong> rather than delivered later — reports never queue up or arrive in a
+    batch after you have been away.
+  </p>
+  <p>
+    <strong>What the backend keeps.</strong> A report is composed, sent and discarded; its
+    contents are never stored. What is stored, for as long as you stay subscribed, is one record
+    holding your email address, whether it has been confirmed, an identifier for your
+    installation, and the identifier of the last period sent for each frequency — that last one
+    is what stops the same report being emailed twice. An address entered but never confirmed is
+    deleted automatically after 7 days.
+  </p>
+  <p>
+    <strong>Stopping them.</strong> Clear the email address in Settings, or use the unsubscribe
+    link at the foot of any report; unsubscribing deletes the record described above. Mail is
+    sent from <code>info@websaleem.com</code>, which is not monitored — replies are not read, and
+    questions should go through
+    <a href="https://secureview.websaleem.com/contact-support.html">Contact Support</a>.
   </p>
   <p>
     SecureView no longer has user accounts. The previous version required a sign-in to
@@ -115,7 +157,7 @@
   <ul>
     <li><strong>tabs</strong> — to detect the active tab URL and title when you switch tabs or navigate.</li>
     <li><strong>storage</strong> — to persist browsing data and settings locally.</li>
-    <li><strong>alarms</strong> — to flush accumulated time to storage every 60 seconds.</li>
+    <li><strong>alarms</strong> — to flush accumulated time to storage every 60 seconds, and (if you have turned reports on) to check once a minute whether a report is due.</li>
     <li><strong>idle</strong> — to detect when you have stopped using the computer, so time away is not counted.
         The threshold is <strong>3 minutes</strong> without keyboard or mouse input. Because reading a page
         produces no input at all, time keeps being counted past that point while the browser window still has
@@ -132,14 +174,17 @@
     <li><strong>Exclude domains</strong> — add any domain to the Excluded Domains list in Settings. Excluded domains are never tracked or sent for classification. You can also exclude the currently active site instantly using the 🚫 button in the current-page bar; this simultaneously removes all tracking data recorded for that domain today. Tap 🔓 on an excluded site to restore tracking.</li>
     <li><strong>Toggle AI categorization</strong> — disable the "Force AI Classification" setting to prevent any network requests for sites already matched by built-in rules.</li>
     <li><strong>Debug logging</strong> — logging is enabled by default in beta builds and disabled in production. It can be toggled in Settings and writes only to the local browser console.</li>
-    <li><strong>Uninstall</strong> — removing the extension deletes all locally stored data.</li>
+    <li><strong>Email reports</strong> — off by default. They require both an address and a confirmation click, and stop the moment you clear the address or use the unsubscribe link in a report.</li>
+    <li><strong>Uninstall</strong> — removing the extension deletes all locally stored data. If you had confirmed an email address, unsubscribe first: uninstalling removes local data but does not delete the subscription record.</li>
   </ul>
 
   <h2>6. Data Retention</h2>
   <p>
-    Daily browsing records are automatically deleted after <strong>7 days</strong>. The
-    extension retains the current day plus the 6 prior days of data; older records are
-    pruned automatically. You can also clear today's data at any time via the popup.
+    Daily browsing records are automatically deleted after <strong>8 days</strong>. The
+    extension retains the current day plus the 7 prior days of data; older records are
+    pruned automatically. The eighth day exists so a weekly report sent on a Monday still has
+    the whole of the previous Monday to report on — at seven days, the first day of that week
+    would already have been deleted. You can also clear today's data at any time via the popup.
     Uninstalling the extension removes all locally stored data.
   </p>
   <p>
@@ -156,6 +201,12 @@
     The AI classification pipeline runs on Amazon Web Services (AWS). AWS services involved
     are CloudFront, Lambda@Edge, API Gateway, Lambda, and Amazon Bedrock. AWS's own privacy
     practices apply to data processed through these services.
+  </p>
+  <p>
+    If you turn on email reports, two further AWS services are involved: <strong>Amazon
+    SES</strong> delivers the email, and <strong>Amazon DynamoDB</strong> holds the single
+    subscription record described in section 3a. The report's contents pass through SES in order
+    to be delivered and are not stored by us.
   </p>
   <p>
     The support and uninstall-feedback forms on this website are delivered by
