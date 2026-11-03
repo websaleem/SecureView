@@ -23,6 +23,7 @@ later and wondered about.
 Idempotent: with nothing to change it makes no API call.
 """
 import json
+import os
 import subprocess
 import sys
 
@@ -57,13 +58,49 @@ def main():
 
     desired = json.loads(json.dumps(template))   # deep copy
     desired["PathPattern"] = PATH_PATTERN
+
+    # The /categorize guard must NOT come along. It rejects anything that is not
+    # a POST carrying application/json, which is right for the classifier and
+    # wrong here: the confirmation and unsubscribe links are browser GETs, and
+    # the guard answers them 405. The equivalent check lives inside the report
+    # Lambda, applied to the POST routes only, where GET and POST can be told
+    # apart.
+    #
+    # This clearing was described in the docstring and absent from the code,
+    # which is how prod ended up serving 405 on every confirmation link.
+    desired["FunctionAssociations"] = {"Quantity": 0}
     desired["AllowedMethods"] = {
         "Quantity": len(ALL_METHODS),
         "Items": ALL_METHODS,
         "CachedMethods": {"Quantity": 2, "Items": ["HEAD", "GET"]},
     }
+    if os.environ.get("REPORT_SIGNER_ARN", "").strip():
+        desired["LambdaFunctionAssociations"] = {
+            "Quantity": 1,
+            "Items": [{
+                "LambdaFunctionARN": os.environ["REPORT_SIGNER_ARN"].strip(),
+                "EventType": "origin-request",
+                # The report POST bodies must reach the signer, or it signs an
+                # empty payload and API Gateway rejects the mismatch.
+                "IncludeBody": True,
+            }],
+        }
 
     signer = (template.get("LambdaFunctionAssociations", {}).get("Items") or [{}])[0].get("LambdaFunctionARN", "")
+
+    # REPORT_SIGNER_ARN pins the new behaviour to a specific signer version
+    # instead of whatever /categorize currently uses.
+    #
+    # It exists so a first deployment does not have to move the classifier. The
+    # report routes need a signer that knows them; /categorize is already
+    # working on an older version that does not. Repointing the classifier is a
+    # change to the one path every user depends on, and it does not have to
+    # happen on the same day as a new feature. Both versions contain the
+    # classifier logic unchanged, so running two for a while is safe.
+    override = os.environ.get("REPORT_SIGNER_ARN", "").strip()
+    if override:
+        print(f"    overriding signer: {signer or '(none)'} -> {override}")
+        signer = override
     print(f"  cloning {CLONE_FROM}: origin={template['TargetOriginId']}")
     print(f"    signer: {signer or '(none!)'}")
     if not signer:

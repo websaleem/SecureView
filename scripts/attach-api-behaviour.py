@@ -94,6 +94,13 @@ def upsert_api_behaviour(config, edge_version_arn):
                 }
             ],
         },
+        # Filled in below from whatever is already attached. Hardcoding
+        # {"Quantity": 0} here silently stripped the CloudFront function that
+        # guards this path — the one that rejects the content types a no-cors
+        # page can send, and so stops any website billing our Bedrock account
+        # through its visitors' browsers. It was removed from dev by exactly
+        # this line, on a deploy whose summary said only "update behaviour
+        # (origin / edge version / IncludeBody)".
         "FunctionAssociations": {"Quantity": 0},
         "FieldLevelEncryptionId": "",
         "CachePolicyId": CACHING_DISABLED,
@@ -105,6 +112,16 @@ def upsert_api_behaviour(config, edge_version_arn):
     changes = []
 
     existing = next((b for b in items if b["PathPattern"] == API_PATH), None)
+
+    # Carry forward any viewer-request function already on this behaviour. This
+    # script owns the origin, the edge version and the policies; it does not own
+    # the guard, and overwriting what it does not own is how a security control
+    # disappears without anyone deciding to remove it.
+    if existing:
+        inherited = existing.get("FunctionAssociations")
+        if inherited and inherited.get("Quantity"):
+            desired["FunctionAssociations"] = inherited
+
     if existing is None:
         insert_at = next((i for i, b in enumerate(items) if b["PathPattern"] == CATCH_ALL), len(items))
         items.insert(insert_at, desired)
