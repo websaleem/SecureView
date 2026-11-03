@@ -13,7 +13,11 @@
 // scripts/build-zip.sh swaps it for the production alias on the prod channel.
 const _CF_HOST = ["https://", "dev.secureview", ".websaleem", ".com"].join("");
 const CF_CONFIG = {
-  url: `${_CF_HOST}/categorize`
+  url: `${_CF_HOST}/categorize`,
+  // Report endpoints live on the same distribution and are rewritten by the
+  // same _CF_HOST substitution, so they cannot drift to a different
+  // environment than the classifier does.
+  reportBase: `${_CF_HOST}/report`
 };
 
 function getCFConfig() {

@@ -5,6 +5,8 @@ importScripts("../shared/config.js");
 importScripts("../shared/categories.js");
 importScripts("../shared/categorizer.js");
 importScripts("../shared/logger.js");
+importScripts("../shared/report.js");
+importScripts("../shared/reporter.js");
 
 const LOG = "BACKGROUND";
 
@@ -636,6 +638,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 
   await pruneOldData();        // Drop data_* keys past the retention window
+
+  // Email reports. Rides the existing tick instead of adding an alarm: outside
+  // the morning send window this is a clock comparison and nothing more.
+  try {
+    const outcome = await maybeSendReport();
+    if (outcome !== "outside_window" && outcome !== "no_email") {
+      Logger.debug(LOG, `Report check: ${outcome}`);
+    }
+  } catch (e) {
+    // A report must never take tracking down with it.
+    Logger.warn(LOG, `Report check failed: ${e?.message}`);
+  }
 });
 
 // True only for messages from one of this extension's own pages (the popup).

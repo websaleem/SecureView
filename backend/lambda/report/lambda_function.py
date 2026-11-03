@@ -48,6 +48,16 @@ TABLE = os.environ["SUBSCRIBERS_TABLE"]
 SENDER = os.environ["REPORT_SENDER"]            # e.g. SecureView <reports@websaleem.com>
 SITE_BASE = os.environ["SITE_BASE_URL"].rstrip("/")   # for confirm/unsubscribe links
 
+# info@ is a send-only address: nothing reads the replies. Saying so in the mail
+# matters more than it looks — a recipient with a question about unexpected mail
+# will otherwise reply and hear nothing, which is exactly how legitimate mail
+# starts getting reported as spam. Point them at the form that is monitored.
+SUPPORT_URL = f"{SITE_BASE}/contact-support.html"
+NO_REPLY_NOTE = ("This address is not monitored — replies are not read. "
+                 f'Questions go to <a href="{SUPPORT_URL}">Contact Support</a>.')
+NO_REPLY_NOTE_TEXT = ("This address is not monitored — replies are not read. "
+                      f"Questions: {SUPPORT_URL}")
+
 # An unconfirmed row is a stranger's address we were asked to mail once. Keep it
 # only as long as the link is useful.
 CONFIRM_TTL_SECONDS = 7 * 24 * 3600
@@ -374,7 +384,8 @@ def _render_email(report, unsub_url):
 
   <p style="color:#94a3b8;font-size:11px;margin:28px 0 0;border-top:1px solid #e2e8f0;padding-top:16px;">
     Sent because you confirmed this address for SecureView reports.
-    <a href="{html.escape(unsub_url)}" style="color:#64748b;">Unsubscribe</a>.
+    <a href="{html.escape(unsub_url)}" style="color:#64748b;">Unsubscribe</a>.<br />
+    {NO_REPLY_NOTE}
   </p>
 </div></body></html>"""
 
@@ -391,7 +402,7 @@ def _render_email(report, unsub_url):
     text_lines += ["", "Top sites:"]
     for d in report["domains"][:MAX_DOMAINS_IN_EMAIL]:
         text_lines.append(f"  {d['hostname']} ({d['category']}): {_fmt_duration(d['seconds'])}")
-    text_lines += ["", f"Unsubscribe: {unsub_url}"]
+    text_lines += ["", f"Unsubscribe: {unsub_url}", NO_REPLY_NOTE_TEXT]
 
     subject = f"SecureView {freq} Report — {period}"
     return subject, html_body, "\n".join(text_lines)
@@ -472,11 +483,11 @@ def _subscribe(body):
 If you did not ask for this, ignore this email — nothing will be sent.</p>
 <p><a href="{html.escape(confirm_url)}" style="display:inline-block;background:#2563eb;color:#fff;
 padding:10px 18px;border-radius:8px;text-decoration:none;font-size:14px;">Confirm this address</a></p>
-<p style="font-size:12px;color:#94a3b8;">This link expires in 7 days.</p>
+<p style="font-size:12px;color:#94a3b8;">This link expires in 7 days.<br />{NO_REPLY_NOTE}</p>
 </body></html>""",
         f"Confirm your SecureView reports: {confirm_url}\n\n"
         f"If you did not ask for this, ignore this email — nothing will be sent.\n"
-        f"This link expires in 7 days.",
+        f"This link expires in 7 days.\n\n{NO_REPLY_NOTE_TEXT}",
     )
     log.info(json.dumps({"event": "verification_sent"}))
     return _resp(202, {"status": "pending"})
