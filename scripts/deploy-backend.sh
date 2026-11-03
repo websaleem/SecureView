@@ -163,6 +163,20 @@ ensure_bucket "$API_ARTIFACTS" "$API_REGION"
 ensure_bucket "$EDGE_ARTIFACTS" "$EDGE_REGION"
 
 say "Packaging"
+# TWO functions come out of backend/lambda, and the second line is easy to miss:
+#
+#   backend/lambda/bedrock/lambda_function.py  -> the classifier (Bedrock call)
+#   backend/lambda/lambda_function.py          -> the Lambda@Edge SigV4 signer,
+#                                                 deployed as secureview-edge-*
+#
+# `package backend/lambda edge` zips that directory RECURSIVELY, so the edge
+# bundle contains the edge handler plus a spare copy of the classifier it never
+# imports. Harmless, but it is why the edge zip lists bedrock/lambda_function.py.
+#
+# Neither file is dead code. backend/lambda/lambda_function.py sits at a generic
+# path with no header saying what it is, and has been mistaken for an orphan on
+# the strength of the classifier line alone — deleting it would break
+# /categorize at origin-request on the next deploy.
 CLASSIFIER_KEY=$(package backend/lambda/bedrock classifier "$API_ARTIFACTS")
 EDGE_KEY=$(package backend/lambda edge "$EDGE_ARTIFACTS")
 echo "  classifier: $CLASSIFIER_KEY"
