@@ -37,6 +37,12 @@ jobs:
         env:
           PROD_DIST_ID: ${{ secrets.SECUREVIEW_PROD_CF_DIST_ID }}
           DEV_DIST_ID: ${{ secrets.SECUREVIEW_DEV_CF_DIST_ID }}
+          # The beta listing's id, so the dev site links to the beta extension
+          # rather than sending testers to install production. Same secret the
+          # release workflow already uses to upload the beta zip, so there is
+          # one source of truth for which listing "beta" means.
+          PROD_EXTENSION_ID: ojhmodiiehcingcnhlglenenoemmegim
+          BETA_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID_BETA }}
         run: |
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             BUCKET="secureview.websaleem.com"
@@ -48,6 +54,33 @@ jobs:
             echo "=== Deploying to DEVELOPMENT ($BUCKET) ==="
             # Inject dev URLs for the dev website
             find website -type f -name "*.html" -exec sed -i 's|https://secureview.websaleem.com|https://dev.secureview.websaleem.com|g' {} +
+
+            # And point the store links at the BETA listing.
+            #
+            # Without this the dev site's "Add to Chrome", uninstall and support
+            # links all carried the production extension id, so anyone testing
+            # from the dev site installed the live extension instead of the beta
+            # they were there to try — and the uninstall-feedback page offered to
+            # reinstall production too.
+            #
+            # Hard failure rather than a best-effort rewrite: an empty secret
+            # would sed these into ".../detail/" and produce dead links on every
+            # page, which is worse than not deploying.
+            if [ -z "$BETA_EXTENSION_ID" ]; then
+              echo "FATAL: CWS_EXTENSION_ID_BETA is not set — refusing to deploy dev with production store links" >&2
+              exit 1
+            fi
+            find website -type f -name "*.html" -exec \
+              sed -i "s|chromewebstore.google.com/detail/$PROD_EXTENSION_ID|chromewebstore.google.com/detail/$BETA_EXTENSION_ID|g" {} +
+
+            # Positive check, not a hopeful one: assert the production id is gone
+            # from what is about to be uploaded.
+            if grep -rl "detail/$PROD_EXTENSION_ID" website/ >/dev/null 2>&1; then
+              echo "FATAL: production extension id still present after rewrite:" >&2
+              grep -rln "detail/$PROD_EXTENSION_ID" website/ >&2
+              exit 1
+            fi
+            echo "Store links rewritten to the beta listing."
           fi
           
           # Sync and capture output to stderr (so we still see it in logs) and a variable

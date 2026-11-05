@@ -6,7 +6,7 @@
   "scripts": {
     "build": "./scripts/build-zip.sh",
     "build:beta": "CHANNEL=beta ./scripts/build-zip.sh",
-    "test": "node test/verify-build.mjs && node test/verify-history-window.mjs && node test/verify-time-accounting.mjs && node test/verify-report-windows.mjs && node test/verify-report-scheduling.mjs && python3 -I test/test_report_lambda.py && python3 -I test/test_edge_signer.py"
+    "test": "node test/verify-build.mjs && node test/verify-history-window.mjs && node test/verify-time-accounting.mjs && node test/verify-report-windows.mjs && node test/verify-report-scheduling.mjs && node test/verify-website-links.mjs && python3 -I test/test_report_lambda.py && python3 -I test/test_edge_signer.py"
   },
   "license": "ISC"
 }
