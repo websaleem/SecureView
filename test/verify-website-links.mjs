@@ -22,6 +22,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 
 const PROD_ID = 'ojhmodiiehcingcnhlglenenoemmegim';
+const BETA_ID = 'hiopfkjjakmgoodhldhppaokdaceilbd';
 const CANONICAL = /^https:\/\/chromewebstore\.google\.com\/detail\/[a-p]{32}$/;
 
 const failures = [];
@@ -60,8 +61,16 @@ console.log(`\n--- the deploy workflow's half of the bargain ---`);
 const wf = readFileSync('.github/workflows/deploy-website.yml', 'utf8');
 check('the production id the rewrite looks for matches the source',
   new RegExp(`PROD_EXTENSION_ID:\\s*${PROD_ID}\\b`).test(wf), true);
-check('the beta id comes from the secret, not a literal',
-  /BETA_EXTENSION_ID:\s*\$\{\{\s*secrets\.CWS_EXTENSION_ID_BETA\s*\}\}/.test(wf), true);
+check('the workflow carries the beta id',
+  new RegExp(`BETA_EXTENSION_ID:\\s*${BETA_ID}\\b`).test(wf), true);
+// Distinct and well-formed. Pasting the production id into the beta slot would
+// otherwise rewrite every dev link to production and look like it had worked.
+check('the two ids are different', PROD_ID === BETA_ID, false);
+check('the beta id is a well-formed store id', /^[a-p]{32}$/.test(BETA_ID), true);
+// A change to the deploy logic must actually deploy, or a fix to the rewrite
+// sits pushed and inert — which is exactly what happened to it once.
+check('the workflow redeploys when the workflow itself changes',
+  /- '\.github\/workflows\/deploy-website\.yml'/.test(wf), true);
 check('the dev branch rewrites the store links',
   /sed -i .*chromewebstore\.google\.com\/detail\/\$PROD_EXTENSION_ID/.test(wf), true);
 // An empty secret would rewrite these to ".../detail/" on every page, which is

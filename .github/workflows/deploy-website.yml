@@ -7,6 +7,11 @@ on:
       - dev
     paths:
       - 'website/**'
+      # The workflow itself, so a change to how pages are deployed actually
+      # deploys them. The store-id rewrite was fixed, committed and pushed, and
+      # changed nothing live — because the commit touched no file under
+      # website/ and this filter never matched it.
+      - '.github/workflows/deploy-website.yml'
   workflow_dispatch:
 
 # Least privilege for GITHUB_TOKEN: read the repository, and mint the OIDC
@@ -37,12 +42,22 @@ jobs:
         env:
           PROD_DIST_ID: ${{ secrets.SECUREVIEW_PROD_CF_DIST_ID }}
           DEV_DIST_ID: ${{ secrets.SECUREVIEW_DEV_CF_DIST_ID }}
-          # The beta listing's id, so the dev site links to the beta extension
-          # rather than sending testers to install production. Same secret the
-          # release workflow already uses to upload the beta zip, so there is
-          # one source of truth for which listing "beta" means.
+          # Store listing ids, so the dev site links to the beta extension
+          # rather than sending testers to install production.
+          #
+          # Both are plain literals because neither is a secret: a store id
+          # appears in the public URL of every listing. The beta id was briefly
+          # read from secrets.CWS_EXTENSION_ID_BETA, which made dev deploys
+          # depend on a value nobody could verify from outside the repo, and the
+          # guard below turned a missing secret into a hard deploy failure. As
+          # literals they are visible, diffable, and covered by
+          # test/verify-website-links.mjs.
+          #
+          # release.yml still reads CWS_EXTENSION_ID_BETA, which is a different
+          # job: it needs the id as part of an authenticated upload, next to
+          # OAuth credentials that genuinely are secret.
           PROD_EXTENSION_ID: ojhmodiiehcingcnhlglenenoemmegim
-          BETA_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID_BETA }}
+          BETA_EXTENSION_ID: hiopfkjjakmgoodhldhppaokdaceilbd
         run: |
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             BUCKET="secureview.websaleem.com"
