@@ -219,6 +219,93 @@ async function maybeSendReport(now = new Date()) {
 }
 
 /**
+ * Is this build pointed at the dev environment?
+ *
+ * The test-report control is gated on this rather than on a build-time flag,
+ * because the thing that actually matters is which backend would receive the
+ * report — and that is decided by the same _CF_HOST substitution the build
+ * already performs and already tests. A production zip resolves to the
+ * production host and the control stays hidden.
+ */
+function isDevBuild() {
+  const base = getCFConfig()?.reportBase || "";
+  return /^https:\/\/dev\./.test(base);
+}
+
+/**
+ * Send a report for TODAY, on demand, for testing.
+ *
+ * Bypasses only the morning send window — the thing that otherwise makes
+ * verifying this feature a day-long round trip. It does NOT bypass consent: an
+ * unconfirmed address is refused here exactly as it is on the scheduled path,
+ * because that check is the whole reason the feature is safe to ship.
+ *
+ * Deliberately TODAY rather than yesterday, so a tester sees the browsing they
+ * just did, and so the window id cannot collide with the real daily report and
+ * mark it as already sent.
+ */
+async function sendTestReport(now = new Date()) {
+  if (!isDevBuild()) return "not_dev";
+
+  const stored = await chrome.storage.local.get([REPORT_EMAIL_KEY, REPORT_FREQ_KEY]);
+  const email = typeof stored[REPORT_EMAIL_KEY] === "string" ? stored[REPORT_EMAIL_KEY].trim() : "";
+  if (!email) return "no_email";
+
+  const state = await _getReportState();
+  if (state.status !== "verified" || state.subscribedEmail !== email) {
+    const status = await refreshReportStatus();
+    if (status !== "verified") return "not_verified";
+  }
+
+  // Today's key, built the same way as every other day key.
+  const todayKey = reportDayKey(now);
+  const byKey = await chrome.storage.local.get([todayKey]);
+  const day = byKey[todayKey];
+  if (!day || !Object.keys(day.domains || {}).length) return "nothing_tracked";
+
+  const report = buildReportData("daily", byKey, now);
+  // buildReportData computes the window from `now`, which for "daily" is
+  // yesterday. Re-point it at today, which is the data actually being sent.
+  report.windowId = `daily:${todayKey}`;
+  report.startDay = todayKey;
+  report.endDay = todayKey;
+  report.daysCovered = 1;
+  report.daysPresent = 1;
+  const domains = Object.values(day.domains || {})
+    .filter((d) => d && d.hostname)
+    .map((d) => ({ hostname: d.hostname, seconds: d.seconds || 0, category: d.category || "Other" }))
+    .sort((a, b) => b.seconds - a.seconds);
+  report.domains = domains;
+  report.totalSeconds = domains.reduce((n, d) => n + d.seconds, 0);
+  report.categories = domains.reduce((acc, d) => {
+    acc[d.category] = (acc[d.category] || 0) + d.seconds;
+    return acc;
+  }, {});
+
+  const fresh = await _getReportState();
+  try {
+    const { ok, status, body } = await _postReport("/send", {
+      email,
+      clientId: fresh.clientId,
+      report,
+    });
+    if (ok && body.status === "sent") {
+      Logger.info("REPORTS", `Test report sent for ${report.windowId}`);
+      return "sent";
+    }
+    // Surfaced rather than smoothed over: the backend sends one report per
+    // window, so a second press the same day is correctly a duplicate.
+    if (body.status === "duplicate") return "duplicate";
+    if (body.status === "not_confirmed") return "not_verified";
+    Logger.warn("REPORTS", `Test report refused (${status})`);
+    return "failed";
+  } catch (e) {
+    Logger.warn("REPORTS", `Test report failed: ${e?.message}`);
+    return "failed";
+  }
+}
+
+/**
  * Drop send history for windows that can no longer come round again.
  *
  * Without this the `sent` map grows for the life of the install. Keyed by

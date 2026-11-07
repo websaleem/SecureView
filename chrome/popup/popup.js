@@ -518,6 +518,22 @@ async function renderSettings(data) {
     });
   renderExclusionList(settings.excludedDomains, data);
   await paintReportStatus();
+  paintTestReportControl();
+}
+
+// The test-report row is shown only when this build talks to the dev backend.
+//
+// Gated on the resolved endpoint rather than a build flag, because what matters
+// is which backend would receive the report — and that is set by the same
+// _CF_HOST substitution the build already performs and verify-build.mjs already
+// checks. A production zip resolves to the production host, so the row stays
+// hidden there even though the markup ships.
+function paintTestReportControl() {
+  const row = document.getElementById("test-report-row");
+  if (!row) return;
+  const base = (typeof getCFConfig === "function" && getCFConfig()?.reportBase) || "";
+  const isDev = /^https:\/\/dev\./.test(base);
+  row.classList.toggle("hidden", !isDev);
 }
 
 // Takes the gap-filled window from buildDayWindow (oldest first), NOT the raw
@@ -725,6 +741,36 @@ async function init() {
       alert("Could not clear today's data. Please try again.");
     }
   });
+
+  // Dev-only test report. The button is hidden on production builds; the
+  // handler is harmless there anyway because the worker refuses the message.
+  const testReportBtn = document.getElementById("test-report-btn");
+  if (testReportBtn) {
+    testReportBtn.addEventListener("click", async () => {
+      const msg = document.getElementById("test-report-msg");
+      const say = (text, kind) => {
+        if (!msg) return;
+        msg.textContent = text;
+        msg.classList.remove("is-ok", "is-pending");
+        if (kind) msg.classList.add(kind);
+      };
+      testReportBtn.disabled = true;
+      say("Sending…", "is-pending");
+      const res = await chrome.runtime.sendMessage({ type: "SEND_TEST_REPORT" }).catch(() => null);
+      // Each outcome says what to do about it, rather than a generic failure.
+      const outcomes = {
+        sent: ["Sent — check your inbox.", "is-ok"],
+        duplicate: ["Already sent today's report. One per window; try again tomorrow.", "is-pending"],
+        not_verified: ["Confirm the email address first.", "is-pending"],
+        no_email: ["Add an email address first.", "is-pending"],
+        nothing_tracked: ["Nothing tracked today yet — browse a little first.", "is-pending"],
+        not_dev: ["Only available in dev builds.", "is-pending"],
+      };
+      const [text, kind] = outcomes[res?.status] || ["Could not send. See the console.", null];
+      say(text, kind);
+      testReportBtn.disabled = false;
+    });
+  }
 
   // History
   document.getElementById("history-btn").addEventListener("click", async () => {

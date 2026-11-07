@@ -128,6 +128,17 @@
             <div id="report-msg" class="setting-msg" role="status" aria-live="polite"></div>
               <div id="report-status" class="setting-status" role="status" aria-live="polite"></div>
           </div>
+          <div class="setting-row hidden" id="test-report-row" style="align-items: center;">
+            <div class="setting-info">
+              <div class="setting-label">Send a test report</div>
+              <div class="setting-desc">
+                Dev builds only. Sends today's tracked time straight away instead of waiting
+                for the morning window. The address has to be confirmed first.
+              </div>
+              <div id="test-report-msg" class="setting-status" role="status" aria-live="polite"></div>
+            </div>
+            <button class="toggle-btn" id="test-report-btn" type="button">Send now</button>
+          </div>
           <div class="setting-row" style="align-items: center;">
             <div class="setting-info">
               <div class="setting-label">Frequency</div>
@@ -190,6 +201,7 @@
     </div>
   </div>
 
+  <script src="../shared/config.js"></script>
   <script src="../shared/logger.js"></script>
   <script src="../shared/categories.js"></script>
   <script src="popup.js"></script>

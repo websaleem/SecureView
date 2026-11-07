@@ -78,8 +78,40 @@ function verify(channel, expected, forbidden) {
     containsHost(dir, forbidden), false);
 }
 
+/**
+ * The dev-only test-report control must be inert in a production build.
+ *
+ * Its markup ships in both channels; what gates it is the resolved report
+ * endpoint. So the check that matters is not "is the button absent" but "does
+ * the gate evaluate false" — asserted by resolving the shipped config exactly
+ * as the popup does.
+ */
+function verifyTestReportGate(channel, expectVisible) {
+  const dir = `build/${channel}`;
+  const host = resolveHost(`${dir}/shared/config.js`);
+  const reportBase = `${host}/report`;
+  const isDev = /^https:\/\/dev\./.test(reportBase);
+  check(`${channel}: test-report control ${expectVisible ? 'enabled' : 'inert'}`, isDev, expectVisible);
+
+  // And the gate in the shipped code must be the same test, not a copy that
+  // could drift — both the popup and the worker check the dev host.
+  const popup = readFileSync(`${dir}/popup/popup.js`, 'utf8');
+  const reporter = readFileSync(`${dir}/shared/reporter.js`, 'utf8');
+  check(`${channel}: popup gates on the dev host`,
+    /\/\^https:\\\/\\\/dev\\\./.test(popup), true);
+  check(`${channel}: worker gates on the dev host`,
+    /\/\^https:\\\/\\\/dev\\\./.test(reporter), true);
+  // A production build must not be able to reach the send path at all.
+  if (!expectVisible) {
+    check(`${channel}: config resolves to production, so sendTestReport refuses`,
+      reportBase.startsWith('https://secureview.websaleem.com'), true);
+  }
+}
+
 verify('production', PROD, DEV);
+verifyTestReportGate('production', false);
 verify('beta', DEV, PROD);
+verifyTestReportGate('beta', true);
 
 console.log();
 if (failures.length) {

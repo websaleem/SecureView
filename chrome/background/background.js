@@ -737,6 +737,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Dev-only: send a report now rather than waiting for the morning window.
+  //
+  // Gated twice. isFromExtensionPage keeps it off the content script, like the
+  // other privileged handlers; sendTestReport itself refuses unless the build
+  // points at the dev backend, so the handler is inert in a production zip even
+  // though the code ships there.
+  if (message.type === "SEND_TEST_REPORT") {
+    if (!isFromExtensionPage(sender)) {
+      Logger.warn(LOG, "Rejected SEND_TEST_REPORT from a non-extension sender");
+      sendResponse({ status: "forbidden" });
+      return true;
+    }
+    (async () => {
+      try {
+        await ready();
+        sendResponse({ status: await sendTestReport() });
+      } catch (e) {
+        Logger.warn(LOG, `Test report failed: ${e?.message}`);
+        sendResponse({ status: "failed" });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === "CLEAR_TODAY") {
     if (!isFromExtensionPage(sender)) {
       Logger.warn(LOG, "Rejected CLEAR_TODAY from a non-extension sender");
