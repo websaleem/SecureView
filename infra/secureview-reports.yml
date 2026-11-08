@@ -55,7 +55,7 @@ Parameters:
 
   ReportSender:
     Type: String
-    Default: SecureView <info@websaleem.com>
+    Default: SecureView <verify@secureview.websaleem.com>
     Description: >-
       From address. Send-only: nothing reads replies, and both emails say so.
       The domain must be a verified SES identity in this region.
@@ -145,10 +145,23 @@ Resources:
                 Action:
                   - ses:SendEmail
                 Resource:
+                  # Both the parent domain identity and the subdomain. Only
+                  # websaleem.com is verified in SES, and that verification
+                  # covers its subdomains — confirmed by sending from
+                  # verify@secureview.websaleem.com before making this change.
+                  # The subdomain ARN is listed as well because which identity
+                  # IAM evaluates for a subdomain send is not worth guessing at,
+                  # and listing both costs nothing: the grant is still two named
+                  # identities rather than a wildcard.
                   - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/websaleem.com"
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/secureview.websaleem.com"
                 Condition:
                   StringEquals:
-                    "ses:FromAddress": "info@websaleem.com"
+                    # Pinned, so a bug here cannot send as any other address on
+                    # a domain this account controls. It also means changing the
+                    # sender fails loudly rather than silently sending as the
+                    # old one.
+                    "ses:FromAddress": "verify@secureview.websaleem.com"
 
   ReportFunction:
     Type: AWS::Lambda::Function

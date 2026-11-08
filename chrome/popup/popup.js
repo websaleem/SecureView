@@ -855,6 +855,23 @@ async function init() {
       // start verification; nothing is ever sent until the link in that mail is
       // clicked. It goes through the worker because the worker owns this
       // install's client id and the host permission for the endpoint.
+      //
+      // Only when the address actually CHANGED, though. Three events save this
+      // field — debounced typing, blur, and Enter — so one edit used to request
+      // verification twice, which sent two emails and burned two of the three
+      // daily allowance. The backend now reuses a live token so both links
+      // work, but there is no reason to send the second email at all.
+      const already = await new Promise((resolve) =>
+        chrome.storage.local.get(["report_state"], (r) => resolve(r.report_state || {})));
+      if (already.subscribedEmail === email &&
+          (already.status === "pending" || already.status === "verified")) {
+        setReportMsg(already.status === "verified"
+          ? "Saved — already confirmed."
+          : "Saved — confirmation email already sent.", "ok");
+        await paintReportStatus();
+        return true;
+      }
+
       setReportMsg("Saved. Sending a confirmation email…", "ok");
       const res = await chrome.runtime
         .sendMessage({ type: "SUBSCRIBE_REPORT_EMAIL", email })

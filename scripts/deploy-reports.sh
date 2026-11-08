@@ -52,6 +52,15 @@ if [[ -z "$DIST" ]]; then
 fi
 
 ARTIFACTS="secureview-artifacts-${ACCOUNT}-${REGION}"
+
+# Passed explicitly on every deploy, never left to the template's Default.
+#
+# A Default only applies when a stack is CREATED. Changing it does nothing to an
+# existing stack: CloudFormation keeps the value last used. That bit once —
+# the IAM grant moved to verify@secureview.websaleem.com while the Lambda kept
+# sending as info@websaleem.com, so every send would have been denied by the
+# condition that pins the sender, with the stack reporting success.
+REPORT_SENDER="SecureView <verify@secureview.websaleem.com>"
 API_STACK="secureview-api-${ENV}"
 
 # Report routes are added to the classifier's API so both share one origin, one
@@ -127,6 +136,7 @@ aws cloudformation deploy \
     Environment="$ENV" \
     ArtifactBucket="$ARTIFACTS" \
     ReportArtifactKey="$key" \
+    ReportSender="$REPORT_SENDER" \
     ApiId="$API_ID" \
     ApiRootResourceId="$API_ROOT" \
     SiteBaseUrl="$SITE_BASE"

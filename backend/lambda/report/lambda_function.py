@@ -62,6 +62,17 @@ NO_REPLY_NOTE_TEXT = ("This address is not monitored — replies are not read. "
 # only as long as the link is useful.
 CONFIRM_TTL_SECONDS = 7 * 24 * 3600
 
+# How long a confirmation link keeps SAYING "confirmed" after it was used.
+#
+# Mail clients and corporate link scanners fetch every URL in a message before
+# a human ever clicks it. That fetch consumes the token, so the user's own click
+# arrived at a link that had already been spent and was told "Link not valid" —
+# while their subscription was in fact live. For this long after a link is used,
+# re-fetching it re-renders the success page instead of an error. It grants no
+# capability: the page confirms an address that is already confirmed, and shows
+# nothing about who it belongs to.
+CONFIRMED_LINK_GRACE_SECONDS = 7 * 24 * 3600
+
 # Verification emails per address per day. The point is not to stop one person
 # subscribing twice; it is to stop an address being mailed over and over by
 # someone who does not own it.
@@ -433,10 +444,42 @@ def _subscribe(body):
     if not email or not isinstance(client_id, str) or not (16 <= len(client_id) <= 128):
         return _resp(400, {"error": "email and clientId are required"})
 
-    confirm_token = secrets.token_urlsafe(32)
-    unsub_token = secrets.token_urlsafe(32)
     now = _now()
     existing = _get_row(email)
+
+    # REUSE a live token rather than minting a new one on every call.
+    #
+    # Minting unconditionally made every earlier verification email dead, which
+    # is how the first real test failed. The popup saves the address on three
+    # separate events — debounced typing, blur, and Enter — so one edit can call
+    # this twice seconds apart. The second call replaced the token, and the link
+    # in the first email, which is the one a person is most likely to click,
+    # answered "Link not valid". Observed in dev: verifySent=2, two sends 2.5s
+    # apart, and only the later link working.
+    #
+    # Reusing it makes every email for an address carry the same working link,
+    # which also means a "resend" is genuinely idempotent. The token is replaced
+    # only when there is nothing usable to reuse: none stored, expired, or
+    # pending for a different installation.
+    reusable = None
+    if existing:
+        stored_token = (existing.get("confirmToken") or {}).get("S", "")
+        expires = int((existing.get("confirmExpires") or {}).get("N", "0"))
+        pending_for = (existing.get("pendingClientId") or {}).get("S", "")
+        same_client = bool(pending_for) and hmac.compare_digest(pending_for, client_id)
+        if stored_token and expires > now and same_client:
+            reusable = stored_token
+
+    confirm_token = reusable or secrets.token_urlsafe(32)
+    unsub_token = secrets.token_urlsafe(32)
+    # A reused token keeps its original expiry. Pushing the window out on every
+    # save would let a 7-day link live indefinitely for an address nobody ever
+    # confirms.
+    if reusable:
+        confirm_expires = int((existing.get("confirmExpires") or {}).get("N", "0"))
+        log.info(json.dumps({"event": "reusing_pending_token"}))
+    else:
+        confirm_expires = now + CONFIRM_TTL_SECONDS
 
     # An address that is already confirmed by a DIFFERENT client is not
     # re-pointed on request — otherwise anyone could redirect a stranger's
@@ -457,13 +500,15 @@ def _subscribe(body):
         ExpressionAttributeNames={"#ttl": "ttl"},
         ExpressionAttributeValues={
             ":t": {"S": confirm_token},
-            ":exp": {"N": str(now + CONFIRM_TTL_SECONDS)},
+            ":exp": {"N": str(confirm_expires)},
             ":cid": {"S": client_id},
             ":now": {"N": str(now)},
             ":unsub": {"S": unsub_token},
             ":false": {"BOOL": False},
-            # Only unconfirmed rows carry a TTL; confirming clears it.
-            ":ttl": {"N": str(now + CONFIRM_TTL_SECONDS)},
+            # Only unconfirmed rows carry a TTL; confirming clears it. Tied to
+            # the link's expiry so the row cannot vanish while its link is still
+            # advertised as valid.
+            ":ttl": {"N": str(confirm_expires)},
         },
     )
 
@@ -493,6 +538,13 @@ padding:10px 18px;border-radius:8px;text-decoration:none;font-size:14px;">Confir
     return _resp(202, {"status": "pending"})
 
 
+def _confirmed_page():
+    """The success page, shown for both the first use of a link and a re-fetch."""
+    return _html_page("SecureView", "Address confirmed",
+                      "Reports will arrive on the schedule you chose. "
+                      "You can change or stop them from the SecureView popup at any time.")
+
+
 def _confirm(params):
     token = (params.get("token") or [""])[0]
     if not token or len(token) > 128:
@@ -503,8 +555,10 @@ def _confirm(params):
     # once per subscription, and indexing a single-use token would cost a GSI
     # for no benefit.
     found = None
+    # Matches the live token OR one already spent, so a second fetch of the same
+    # link can be answered honestly rather than as a failure.
     kwargs = {"TableName": TABLE,
-              "FilterExpression": "confirmToken = :t",
+              "FilterExpression": "confirmToken = :t OR confirmedToken = :t",
               "ExpressionAttributeValues": {":t": {"S": token}}}
     while True:
         page = _ddb.scan(**kwargs)
@@ -519,6 +573,20 @@ def _confirm(params):
         return _html_page("SecureView", "Link not valid",
                           "This link has already been used, or it expired.")
 
+    # Already confirmed by an earlier fetch of THIS link — typically a prefetch
+    # by the mail client, moments before the user clicked it themselves.
+    already = (found.get("confirmedToken") or {}).get("S", "")
+    verified = (found.get("verified") or {}).get("BOOL", False)
+    if (verified and already and hmac.compare_digest(already, token)
+            and int((found.get("confirmedUntil") or {}).get("N", "0")) > _now()):
+        return _confirmed_page()
+
+    # The scan also matches spent tokens now, so the live token is checked
+    # explicitly rather than inferred from the row having been found.
+    if not hmac.compare_digest((found.get("confirmToken") or {}).get("S", ""), token):
+        return _html_page("SecureView", "Link not valid",
+                          "This link has already been used, or it expired.")
+
     if int((found.get("confirmExpires") or {}).get("N", "0")) < _now():
         return _html_page("SecureView", "Link expired",
                           "Open SecureView and save your email again to get a new link.")
@@ -528,15 +596,16 @@ def _confirm(params):
     _ddb.update_item(
         TableName=TABLE,
         Key={"email": {"S": email}},
-        UpdateExpression=("SET verified = :true, clientId = :cid "
+        UpdateExpression=("SET verified = :true, clientId = :cid, "
+                          "confirmedToken = :t, confirmedUntil = :until "
                           "REMOVE confirmToken, confirmExpires, pendingClientId, #ttl"),
         ExpressionAttributeNames={"#ttl": "ttl"},
-        ExpressionAttributeValues={":true": {"BOOL": True}, ":cid": {"S": pending}},
+        ExpressionAttributeValues={":true": {"BOOL": True}, ":cid": {"S": pending},
+                                   ":t": {"S": token},
+                                   ":until": {"N": str(_now() + CONFIRMED_LINK_GRACE_SECONDS)}},
     )
     log.info(json.dumps({"event": "address_confirmed"}))
-    return _html_page("SecureView", "Address confirmed",
-                      "Reports will arrive on the schedule you chose. "
-                      "You can change or stop them from the SecureView popup at any time.")
+    return _confirmed_page()
 
 
 def _status(body):
@@ -618,6 +687,24 @@ def _unsubscribe(params):
     token = (params.get("token") or [""])[0]
     if not token or len(token) > 128:
         return _html_page("SecureView", "Link not valid", "This unsubscribe link is malformed.")
+
+    # A BARE FETCH MUST NOT UNSUBSCRIBE.
+    #
+    # Same cause as the confirmation link: mail clients and link scanners fetch
+    # every URL in a message before a human sees it. This endpoint deleted the
+    # subscription on that fetch, so reports could stop with nobody having
+    # clicked anything, and nothing to show why. The emailed link now only
+    # renders a button; the button's URL is what unsubscribes.
+    #
+    # Still a GET, so the signer's allowlist is unchanged. RFC 8058 one-click
+    # unsubscribe would want a POST, which needs a signer and IAM change; this
+    # fixes the silent-unsubscribe without touching the classifier's path.
+    if (params.get("confirm") or [""])[0] != "1":
+        link = f"{SITE_BASE}/report/unsubscribe?{urlencode({'token': token, 'confirm': '1'})}"
+        return _html_page(
+            "SecureView", "Stop these reports?",
+            "Confirm that you want SecureView to stop emailing reports to this "
+            f'address.<br /><br /><a href="{html.escape(link)}">Yes, unsubscribe</a>')
 
     found = None
     kwargs = {"TableName": TABLE,

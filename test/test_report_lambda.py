@@ -85,13 +85,30 @@ class FakeDDB:
             row["lastSentWeekly"] = vals[":w"]
         if "clientId = :cid" in (UpdateExpression or ""):
             row["clientId"] = vals[":cid"]
+        if "confirmedToken = :t" in (UpdateExpression or ""):
+            row["confirmedToken"] = vals[":t"]
+            row["confirmedUntil"] = vals[":until"]
+        # REMOVE really has to remove, or the idempotency test would pass by
+        # finding a confirmToken the live table had already cleared.
+        rem = (UpdateExpression or "").split("REMOVE")
+        if len(rem) > 1:
+            for frag in rem[1].split(","):
+                attr = frag.strip()
+                attr = names.get(attr, attr)
+                row.pop(attr, None)
         return {}
 
     def scan(self, TableName=None, FilterExpression=None,
              ExpressionAttributeValues=None, ExclusiveStartKey=None):
         token = ExpressionAttributeValues[":t"]["S"]
-        field = "confirmToken" if "confirmToken" in FilterExpression else "unsubToken"
-        items = [r for r in self.rows.values() if r.get(field, {}).get("S") == token]
+        # The real filter may OR several token fields together; match whichever
+        # ones it actually names, so the fake cannot pass a test the live scan
+        # would fail.
+        fields = [f for f in ("confirmToken", "confirmedToken", "unsubToken")
+                  if f"{f} = :t" in (FilterExpression or "")]
+        assert fields, f"unmodelled filter: {FilterExpression}"
+        items = [r for r in self.rows.values()
+                 if any(r.get(f, {}).get("S") == token for f in fields)]
         return {"Items": items}
 
     def delete_item(self, TableName=None, Key=None):
@@ -185,6 +202,74 @@ check_true("subject is about confirming",
            "Confirm" in sent["Content"]["Simple"]["Subject"]["Data"])
 check_true("body carries a confirm link",
            "/report/confirm?token=" in sent["Content"]["Simple"]["Body"]["Html"]["Data"])
+
+print("\n--- a repeated subscribe must not invalidate the first link ---")
+# The popup saves on three events, so one edit can call subscribe twice. If the
+# token is replaced, the link in the first email is dead — which is exactly how
+# the first real-inbox test failed.
+FAKE_SES.sent.clear()
+call("POST", "/report/subscribe", {"email": "twice@example.com", "clientId": "t" * 32})
+first_token = FAKE_DDB.rows["twice@example.com"]["confirmToken"]["S"]
+first_expiry = FAKE_DDB.rows["twice@example.com"]["confirmExpires"]["N"]
+call("POST", "/report/subscribe", {"email": "twice@example.com", "clientId": "t" * 32})
+second_token = FAKE_DDB.rows["twice@example.com"]["confirmToken"]["S"]
+check("the token is reused, so the first link still works", second_token, first_token)
+check("and its expiry is not pushed out",
+      FAKE_DDB.rows["twice@example.com"]["confirmExpires"]["N"], first_expiry)
+# Both emails carry the same link, so either is clickable.
+links = [d["Content"]["Simple"]["Body"]["Html"]["Data"] for d in FAKE_SES.sent]
+check("every email sent carries that same token",
+      all(f"token={first_token}" in l for l in links), True)
+code, page = call("GET", "/report/confirm", query={"token": first_token})
+check("the first email's link confirms successfully", "confirmed" in str(page).lower(), True)
+
+print("\n--- a link that was prefetched must still work for the user ---")
+# Mail clients and corporate link scanners fetch every URL in a message before a
+# human clicks it. That fetch confirms the address and spends the token, so the
+# user's own click used to land on "Link not valid" while their subscription was
+# in fact live. This is the second half of the dead-link report.
+code, page = call("GET", "/report/confirm", query={"token": first_token})
+check("a second fetch of the same link still reports success",
+      "confirmed" in str(page).lower(), True)
+check_true("and does not claim the link is invalid",
+           "not valid" not in str(page).lower())
+check_true("the address stays confirmed",
+           FAKE_DDB.rows["twice@example.com"]["verified"]["BOOL"] is True)
+
+# The grace is time-boxed, not permanent: once it lapses the honest answer is
+# that the link is spent.
+FAKE_DDB.rows["twice@example.com"]["confirmedUntil"] = {"N": "1"}
+code, page = call("GET", "/report/confirm", query={"token": first_token})
+check("once the grace has lapsed the link is reported as used",
+      "not valid" in str(page).lower(), True)
+
+check("an unknown token is still rejected",
+      "not valid" in str(call("GET", "/report/confirm", query={"token": "z" * 40})[1]).lower(),
+      True)
+
+print("\n--- an unsubscribe link must not fire on a prefetch ---")
+# Worse than the confirm case: a scanner fetching this URL used to delete the
+# subscription outright, so reports stopped with nobody having clicked anything.
+call("POST", "/report/subscribe", {"email": "unsub@example.com", "clientId": "u" * 32})
+utok = FAKE_DDB.rows["unsub@example.com"]["unsubToken"]["S"]
+FAKE_DDB.deleted.clear()
+code, page = call("GET", "/report/unsubscribe", query={"token": utok})
+check_true("a bare fetch does not unsubscribe", "unsub@example.com" not in FAKE_DDB.deleted)
+check_true("the row survives it", "unsub@example.com" in FAKE_DDB.rows)
+check_true("it asks for confirmation instead", "confirm=1" in str(page))
+# And the button still works.
+code, page = call("GET", "/report/unsubscribe", query={"token": utok, "confirm": "1"})
+check_true("confirming it does unsubscribe", "unsub@example.com" in FAKE_DDB.deleted)
+check("and says so", "unsubscribed" in str(page).lower(), True)
+
+print("\n--- a different installation does NOT get the pending token ---")
+# Reuse is scoped to the installation that asked. Handing a stranger's pending
+# token to another client would let them confirm an address they do not own.
+call("POST", "/report/subscribe", {"email": "scoped@example.com", "clientId": "u" * 32})
+tok_a = FAKE_DDB.rows["scoped@example.com"]["confirmToken"]["S"]
+call("POST", "/report/subscribe", {"email": "scoped@example.com", "clientId": "v" * 32})
+tok_b = FAKE_DDB.rows["scoped@example.com"]["confirmToken"]["S"]
+check("a second installation gets a fresh token", tok_a == tok_b, False)
 
 print("\n--- still unconfirmed: a report must not go out ---")
 FAKE_SES.sent.clear()
@@ -298,8 +383,12 @@ print("\n--- unsubscribe ---")
 unsub = FAKE_DDB.rows["owner@example.com"]["unsubToken"]["S"]
 code, page = call("GET", "/report/unsubscribe", query={"token": unsub})
 check("unsubscribe returns a page", code, 200)
+# Takes two steps now: the emailed link asks, the button acts. See the prefetch
+# section above for why.
+code, page = call("GET", "/report/unsubscribe", query={"token": unsub, "confirm": "1"})
 check("the row is deleted", "owner@example.com" in FAKE_DDB.deleted, True)
-code, page = call("GET", "/report/unsubscribe", query={"token": "bogus-token"})
+code, page = call("GET", "/report/unsubscribe",
+                  query={"token": "bogus-token", "confirm": "1"})
 check_true("an unknown token gives the same page", "unsubscribed" in str(page).lower())
 
 print("\n--- POST routes require application/json (the no-cors defence) ---")
