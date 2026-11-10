@@ -133,6 +133,27 @@ function shouldTrack(url) {
   return protocol === "http:" || protocol === "https:";
 }
 
+// What is kept of a URL in a day record: scheme and host, nothing else. The
+// full URL used to be stored, query string included — which is where search
+// terms, session ids and reset tokens live, and which the privacy policy says
+// is not collected.
+function originOf(url) {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}/`;
+  } catch {
+    return "";
+  }
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
 // ─── Session state persistence (survives SW restarts within browser session) ──
 
 async function loadState() {
@@ -314,7 +335,7 @@ async function flushTime(url, until = Date.now()) {
         const initialTitle = currentTabTitle || "";
         Logger.debug(LOG, `New domain entry: ${hostname}, title: "${initialTitle}"`);
         data.domains[hostname] = {
-          url, hostname, title: initialTitle, seconds: 0, ms: 0,
+          url: originOf(url), hostname, title: initialTitle, seconds: 0, ms: 0,
           category: category.name, categoryIcon: category.icon,
           categoryColor: category.color, lastVisit: segment.lastInstant
         };
@@ -368,6 +389,11 @@ async function endSession() {
 // Called on tab switch AND on title updates so CloudFront always gets the real title.
 // Hits the category cache if the domain was already classified; makes a fresh call otherwise.
 function triggerEagerCategorization(url, title) {
+  // Checked HERE, not left to the callers. Two of them reach this from a
+  // message or a title event that can arrive while the tracked URL is stale,
+  // and an excluded site was being sent for classification and written into
+  // the day record that way.
+  if (!shouldTrack(url) || isExcluded(url)) return;
   (async () => {
     try {
       const hostname = new URL(url).hostname.replace(/^www\./, "");
@@ -378,7 +404,7 @@ function triggerEagerCategorization(url, title) {
         if (!data.domains[hostname]) {
           Logger.info(LOG, `Eager category set (new): ${hostname} → ${category.name}`);
           data.domains[hostname] = {
-            url, hostname, title: title || currentTabTitle || "", seconds: 0, ms: 0,
+            url: originOf(url), hostname, title: title || currentTabTitle || "", seconds: 0, ms: 0,
             category: category.name, categoryIcon: category.icon,
             categoryColor: category.color, lastVisit: Date.now()
           };
@@ -395,7 +421,7 @@ function triggerEagerCategorization(url, title) {
   })();
 }
 
-async function switchTo(url, tabId, title) {
+async function switchTo(url, tabId, title, { categorize = true } = {}) {
   // Flush time on the previous URL before switching
   if (currentUrl && sessionStart) {
     await flushTime(currentUrl);
@@ -425,7 +451,9 @@ async function switchTo(url, tabId, title) {
 
   // Eagerly categorize and persist so the popup shows the correct category immediately,
   // before the first flushTime (which only runs after elapsed time > 0).
-  triggerEagerCategorization(url, title || "");
+  // Skipped at navigation commit, where there is no title yet: asking without
+  // one gets a worse answer, and a remembered "Other" would then stick.
+  if (categorize) triggerEagerCategorization(url, title || "");
 }
 
 // ─── Tab title sync ───────────────────────────────────────────────────────────
@@ -500,10 +528,27 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (activeTabId !== null) return;
     if (!tab?.active) return;
   }
+  if (changeInfo.url && tabId === activeTabId && hostOf(changeInfo.url) !== hostOf(currentUrl)) {
+    // The tab has COMMITTED a navigation to a different site. Chrome reports
+    // the new page's title next and "complete" last, so waiting for "complete"
+    // left currentUrl pointing at the old site while the new one's title
+    // arrived — and that title was stored against, and sent for classification
+    // with, the wrong site. When the new site was on the exclusion list, that
+    // is how an excluded page's title left the device.
+    //
+    // Switch now, with no title: tab.title at this instant still belongs to
+    // the page being left. The real one arrives through the branch below.
+    Logger.debug(LOG, `Navigation committed (tab ${tabId})`);
+    await switchTo(changeInfo.url, tabId, null, { categorize: false });
+    return;
+  }
   if (changeInfo.status === "complete" && tab.url) {
     Logger.debug(LOG, `Tab updated: ${tab.url} (tab ${tabId})`);
     await switchTo(tab.url, tabId, tab.title);
   } else if (changeInfo.title && tabId === activeTabId) {
+    // Only for the page being tracked. Belt and braces with the commit branch
+    // above: if the tab is showing some other site, this title is not ours.
+    if (tab?.url && hostOf(tab.url) !== hostOf(currentUrl)) return;
     // Title arrived (often after status=complete) — update state and re-trigger
     // categorization with the real title so CloudFront gets accurate context.
     Logger.debug(LOG, `Title update for active tab: "${changeInfo.title}"`);
@@ -690,12 +735,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         await withStorageLock(async () => {
           _dataGeneration++;
-          const key = getTodayKey();
-          const data = await getStorageData(key);
-          if (data.domains[hostname]) {
-            delete data.domains[hostname];
-            recomputeTotals(data);
-            await saveStorageData(data, key);
+          // Every stored day, not just today. "Exclude and clear" that left the
+          // previous week in place kept showing the site in the 7-day view and
+          // kept it in the next weekly report.
+          const all = await chrome.storage.local.get(null);
+          for (const key of Object.keys(all)) {
+            if (!/^data_\d{4}_\d{2}_\d{2}$/.test(key)) continue;
+            const data = all[key];
+            if (data?.domains?.[hostname]) {
+              delete data.domains[hostname];
+              recomputeTotals(data);
+              await saveStorageData(data, key);
+            }
+          }
+          // And the classification cache, which is itself a list of sites.
+          const cache = all.br_cat_cache;
+          if (cache && typeof cache === "object" && hostname in cache) {
+            delete cache[hostname];
+            await storageSet({ br_cat_cache: cache });
           }
         });
         Logger.info(LOG, `Excluded and cleared: ${hostname}`);
@@ -825,6 +882,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!senderUrl || !title || !shouldTrack(senderUrl)) return false;
     ready().then(async () => {
       if (sender.tab?.id !== activeTabId) return;
+      // The tab id alone is not enough: during a navigation the tracked tab is
+      // already showing the next site while currentUrl is still the last one.
+      if (isExcluded(senderUrl) || hostOf(senderUrl) !== hostOf(currentUrl)) return;
       Logger.info(LOG, `PAGE_READY: "${title}" (${new URL(senderUrl).hostname})`);
       if (title !== currentTabTitle) {
         currentTabTitle = title;

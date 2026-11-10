@@ -82,6 +82,21 @@ MAX_VERIFY_EMAILS_PER_DAY = 3
 # already a sign something is retrying in a loop.
 MAX_REPORTS_PER_DAY = 4
 
+# Verification emails per day across ALL addresses.
+#
+# The per-address limit stops one person being mailed repeatedly; it does nothing
+# about one caller naming a different stranger each time. The WAF allows 300
+# requests per 5 minutes per IP, so without this a single address could push
+# tens of thousands of unsolicited "confirm your address" emails a day through
+# our SES identity. Real demand is a handful a day; past this, something is
+# abusing the endpoint and the right response is to stop mailing.
+MAX_VERIFY_EMAILS_GLOBAL_PER_DAY = int(os.environ.get("MAX_VERIFY_EMAILS_GLOBAL_PER_DAY", "300"))
+
+# The reserved key the global counter lives under. Not a valid address (no @),
+# so it can never collide with a subscriber row, and it carries no token, so the
+# confirm/unsubscribe scans cannot match it.
+GLOBAL_COUNTER_KEY = "#verify-global"
+
 # Deliberately not RFC 5322. Rejecting the shapes that are definitely not
 # addresses is the goal; SES is the real arbiter of deliverability.
 EMAIL_RE = re.compile(r"^[^\s@,;:<>\"]{1,64}@[^\s@.,;:<>\"]+(\.[^\s@.,;:<>\"]+)+$")
@@ -101,6 +116,15 @@ KNOWN_CATEGORIES = {
     "Utilities & Energy", "Other",
 }
 
+# What a hostname may look like in a report. The client sends this field and it
+# is rendered into mail, so it must not be able to carry prose: without this a
+# "hostname" could be a 253-character sentence with a URL in it, sent from our
+# domain. Lowercase DNS labels, IPv4, or a bracketed IPv6 literal — which is
+# everything URL().hostname can produce — and nothing with a space or a slash.
+HOSTNAME_RE = re.compile(r"^(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)(?:\.(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?))*\.?$")
+IPV6_HOST_RE = re.compile(r"^\[[0-9a-f:.]{2,45}\]$")
+DAY_KEY_RE = re.compile(r"^data_\d{4}_\d{2}_\d{2}$")
+
 MAX_DOMAINS_IN_EMAIL = 25
 MAX_HOSTNAME_LEN = 253          # the DNS limit; anything longer is not a hostname
 MAX_PAYLOAD_DOMAINS = 500       # a day of browsing is tens, not hundreds
@@ -116,7 +140,17 @@ def _resp(status, obj, content_type="application/json"):
         # legitimate caller is the extension's service worker, which holds host
         # permissions and is not subject to CORS. Sending "*" would let any page
         # drive these endpoints from a visitor's browser.
-        "headers": {"Content-Type": content_type},
+        "headers": {
+            "Content-Type": content_type,
+            # These responses carry a token in their URL or answer for one
+            # install: never cache them, never leak the URL as a Referer, and
+            # never let them be framed or sniffed into something else.
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+        },
         "body": body,
     }
 
@@ -167,6 +201,28 @@ def _get_row(email):
     return got.get("Item")
 
 
+def _same_secret(stored, supplied):
+    """Constant-time equality for two client secrets, False unless both are real.
+
+    Two failure modes this exists to close, both of which turned /status into a
+    way to test whether a stranger's address is subscribed:
+
+      * hmac.compare_digest("", "") is True. A confirmed row has no
+        pendingClientId, so a request that simply OMITTED clientId matched it
+        and was told "verified".
+      * compare_digest raises TypeError on non-ASCII str. A subscriber's row
+        reached the comparison and returned 500; an unknown address never got
+        that far and returned 200.
+
+    Comparing bytes removes the second; refusing empties removes the first.
+    """
+    if not isinstance(stored, str) or not isinstance(supplied, str):
+        return False
+    if not stored or not supplied:
+        return False
+    return hmac.compare_digest(stored.encode("utf-8"), supplied.encode("utf-8"))
+
+
 def _secret_matches(row, client_id):
     """Constant-time comparison of the client secret.
 
@@ -174,10 +230,7 @@ def _secret_matches(row, client_id):
     from "someone guessing addresses", so it is compared without leaking
     length or prefix through timing.
     """
-    stored = (row.get("clientId") or {}).get("S", "")
-    if not stored or not isinstance(client_id, str) or not client_id:
-        return False
-    return hmac.compare_digest(stored, client_id)
+    return _same_secret((row.get("clientId") or {}).get("S", ""), client_id)
 
 
 def _day_bucket(ts=None):
@@ -258,12 +311,12 @@ def _pretty_day(day_key):
     """`data_2026_11_08` -> `8 Nov 2026`, or the raw key if it is malformed."""
     m = re.match(r"^data_(\d{4})_(\d{2})_(\d{2})$", day_key or "")
     if not m:
-        return html.escape(str(day_key))
+        return ""
     y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
     months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     if not 1 <= mo <= 12:
-        return html.escape(day_key)
+        return ""
     return f"{d} {months[mo]} {y}"
 
 
@@ -292,7 +345,8 @@ def _sanitise_report(payload):
     def _int(value, lo=0, hi=10 ** 9):
         try:
             n = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: JSON 1e999 parses to float infinity.
             return 0
         return max(lo, min(hi, n))
 
@@ -307,8 +361,12 @@ def _sanitise_report(payload):
         host = d.get("hostname")
         if not isinstance(host, str):
             continue
-        host = host.strip()[:MAX_HOSTNAME_LEN]
-        if not host:
+        host = host.strip().lower()
+        if not host or len(host) > MAX_HOSTNAME_LEN:
+            continue
+        if not (HOSTNAME_RE.match(host) or IPV6_HOST_RE.match(host)):
+            # Not a hostname, so not rendered. Dropped rather than cleaned up:
+            # there is no honest way to turn a sentence into a site.
             continue
         category = d.get("category")
         if category not in KNOWN_CATEGORIES:
@@ -321,13 +379,40 @@ def _sanitise_report(payload):
 
     domains.sort(key=lambda d: d["seconds"], reverse=True)
 
-    # Totals are recomputed from the sanitised domains rather than trusted from
-    # the payload, so the figures in the email always add up to the rows shown.
-    categories = {}
-    total = 0
+    # The client sends only its top sites — production's WAF refuses bodies over
+    # 8 KB, which a full week of browsing exceeds — so the per-category totals
+    # and the site count can no longer be recomputed from the rows and are taken
+    # from the payload instead. They are still not free text: category names
+    # must be on the list and every figure is a clamped integer, so the worst a
+    # client can do is misstate its own numbers to its own inbox.
+    row_categories = {}
     for d in domains:
-        categories[d["category"]] = categories.get(d["category"], 0) + d["seconds"]
-        total += d["seconds"]
+        row_categories[d["category"]] = row_categories.get(d["category"], 0) + d["seconds"]
+
+    categories = {}
+    raw_categories = payload.get("categories")
+    if isinstance(raw_categories, dict):
+        for name, secs in raw_categories.items():
+            if name in KNOWN_CATEGORIES:
+                categories[name] = _int(secs)
+    # Never report a category as smaller than the rows actually shown for it.
+    for name, secs in row_categories.items():
+        categories[name] = max(categories.get(name, 0), secs)
+    categories = {k: v for k, v in categories.items() if v > 0}
+    total = sum(categories.values())
+
+    site_count = max(_int(payload.get("siteCount"), 0, 100000), len(domains))
+
+    # The period comes from the window id, which has already been validated,
+    # unless the payload names well-formed day keys of its own. These used to be
+    # passed through as arbitrary strings and landed in the SUBJECT line.
+    window_day = window_id.split(":", 1)[1]
+    start_day = payload.get("startDay")
+    end_day = payload.get("endDay")
+    if not (isinstance(start_day, str) and DAY_KEY_RE.match(start_day)):
+        start_day = window_day
+    if not (isinstance(end_day, str) and DAY_KEY_RE.match(end_day)):
+        end_day = start_day
 
     days_covered = _int(payload.get("daysCovered"), 1, 31) or (7 if frequency == "weekly" else 1)
     days_present = min(_int(payload.get("daysPresent"), 0, 31), days_covered)
@@ -335,8 +420,9 @@ def _sanitise_report(payload):
     return {
         "frequency": frequency,
         "windowId": window_id,
-        "startDay": payload.get("startDay") if isinstance(payload.get("startDay"), str) else "",
-        "endDay": payload.get("endDay") if isinstance(payload.get("endDay"), str) else "",
+        "startDay": start_day,
+        "endDay": end_day,
+        "siteCount": site_count,
         "daysCovered": days_covered,
         "daysPresent": days_present,
         "totalSeconds": total,
@@ -370,7 +456,9 @@ def _render_email(report, unsub_url):
         for d in report["domains"][:MAX_DOMAINS_IN_EMAIL]
     ) or '<tr><td colspan="3" class="empty">No sites tracked in this period.</td></tr>'
 
-    more = len(report["domains"]) - MAX_DOMAINS_IN_EMAIL
+    shown = min(len(report["domains"]), MAX_DOMAINS_IN_EMAIL)
+    sites = report["siteCount"]
+    more = sites - shown
     more_note = f'<p class="note">and {more} more site{"s" if more != 1 else ""}.</p>' if more > 0 else ""
 
     html_body = f"""<!DOCTYPE html>
@@ -382,7 +470,7 @@ def _render_email(report, unsub_url):
 
   <p style="font-size:15px;margin:0 0 24px;">
     Total tracked time: <strong>{_fmt_duration(report["totalSeconds"])}</strong>
-    across <strong>{len(report["domains"])}</strong> site{"s" if len(report["domains"]) != 1 else ""}.
+    across <strong>{sites}</strong> site{"s" if sites != 1 else ""}.
   </p>
   {caveat}
 
@@ -403,7 +491,7 @@ def _render_email(report, unsub_url):
     text_lines = [
         f"SecureView {freq} Report — {period}",
         "",
-        f"Total tracked time: {_fmt_duration(report['totalSeconds'])} across {len(report['domains'])} sites.",
+        f"Total tracked time: {_fmt_duration(report['totalSeconds'])} across {sites} site{'s' if sites != 1 else ''}.",
     ]
     if missing > 0:
         text_lines.append(f"No activity recorded on {missing} of {report['daysCovered']} days.")
@@ -413,6 +501,8 @@ def _render_email(report, unsub_url):
     text_lines += ["", "Top sites:"]
     for d in report["domains"][:MAX_DOMAINS_IN_EMAIL]:
         text_lines.append(f"  {d['hostname']} ({d['category']}): {_fmt_duration(d['seconds'])}")
+    if more > 0:
+        text_lines.append(f"  and {more} more site{'s' if more != 1 else ''}.")
     text_lines += ["", f"Unsubscribe: {unsub_url}", NO_REPLY_NOTE_TEXT]
 
     subject = f"SecureView {freq} Report — {period}"
@@ -446,71 +536,81 @@ def _subscribe(body):
 
     now = _now()
     existing = _get_row(email)
+    verified = bool(existing and (existing.get("verified") or {}).get("BOOL"))
 
-    # REUSE a live token rather than minting a new one on every call.
+    # Already confirmed for THIS install: there is nothing to verify, so nothing
+    # is written and nothing is mailed. Re-saving a confirmed address used to
+    # mint a fresh pending token and put a 7-day TTL back on the row — and since
+    # the popup rightly showed "confirmed", nobody clicked the new link and the
+    # subscription was deleted a week later with no error anywhere.
     #
-    # Minting unconditionally made every earlier verification email dead, which
-    # is how the first real test failed. The popup saves the address on three
-    # separate events — debounced typing, blur, and Enter — so one edit can call
-    # this twice seconds apart. The second call replaced the token, and the link
-    # in the first email, which is the one a person is most likely to click,
-    # answered "Link not valid". Observed in dev: verifySent=2, two sends 2.5s
-    # apart, and only the later link working.
-    #
-    # Reusing it makes every email for an address carry the same working link,
-    # which also means a "resend" is genuinely idempotent. The token is replaced
-    # only when there is nothing usable to reuse: none stored, expired, or
-    # pending for a different installation.
+    # Only the owning install gets this answer; anyone else falls through to the
+    # same 202 as an unknown address.
+    if verified and _secret_matches(existing, client_id):
+        return _resp(200, {"status": "verified"})
+
+    # REUSE a live token rather than minting a new one on every call, so every
+    # email sent to an address for one install carries the same working link.
+    # The popup can call this twice for one edit; minting each time made the
+    # first email's link dead on arrival.
     reusable = None
     if existing:
         stored_token = (existing.get("confirmToken") or {}).get("S", "")
         expires = int((existing.get("confirmExpires") or {}).get("N", "0"))
         pending_for = (existing.get("pendingClientId") or {}).get("S", "")
-        same_client = bool(pending_for) and hmac.compare_digest(pending_for, client_id)
-        if stored_token and expires > now and same_client:
+        if stored_token and expires > now and _same_secret(pending_for, client_id):
             reusable = stored_token
 
     confirm_token = reusable or secrets.token_urlsafe(32)
     unsub_token = secrets.token_urlsafe(32)
-    # A reused token keeps its original expiry. Pushing the window out on every
-    # save would let a 7-day link live indefinitely for an address nobody ever
-    # confirms.
+    # A reused token keeps its original expiry, so a link nobody confirms cannot
+    # be kept alive indefinitely by re-saving.
     if reusable:
         confirm_expires = int((existing.get("confirmExpires") or {}).get("N", "0"))
         log.info(json.dumps({"event": "reusing_pending_token"}))
     else:
         confirm_expires = now + CONFIRM_TTL_SECONDS
 
-    # An address that is already confirmed by a DIFFERENT client is not
-    # re-pointed on request — otherwise anyone could redirect a stranger's
-    # reports to their own install by subscribing the same address. They must
-    # confirm the new link, which only the address owner can do.
-    if existing and (existing.get("verified") or {}).get("BOOL") and not _secret_matches(existing, client_id):
+    # A confirmed address asked for by a DIFFERENT install is not re-pointed on
+    # request; the owner of the mailbox has to confirm the new link.
+    rebind = verified
+    if rebind:
         log.info(json.dumps({"event": "subscribe_rebind_requires_confirm"}))
 
+    set_parts = [
+        "confirmToken = :t", "confirmExpires = :exp", "pendingClientId = :cid",
+        "createdAt = if_not_exists(createdAt, :now)",
+        "unsubToken = if_not_exists(unsubToken, :unsub)",
+        "verified = if_not_exists(verified, :false)",
+    ]
+    values = {
+        ":t": {"S": confirm_token},
+        ":exp": {"N": str(confirm_expires)},
+        ":cid": {"S": client_id},
+        ":now": {"N": str(now)},
+        ":unsub": {"S": unsub_token},
+        ":false": {"BOOL": False},
+    }
+    names = None
+    if not verified:
+        # ONLY unconfirmed rows expire. Setting this unconditionally meant any
+        # subscribe call — the user's own, or a stranger's who merely knew the
+        # address — scheduled a confirmed subscription for deletion.
+        set_parts.append("#ttl = :ttl")
+        values[":ttl"] = {"N": str(confirm_expires)}
+        names = {"#ttl": "ttl"}
+
+    update = {
+        "TableName": TABLE,
+        "Key": {"email": {"S": email}},
+        "UpdateExpression": "SET " + ", ".join(set_parts),
+        "ExpressionAttributeValues": values,
+    }
+    if names:
+        update["ExpressionAttributeNames"] = names
+
     _reset_counter_if_new_day(email, "verifySent")
-    _ddb.update_item(
-        TableName=TABLE,
-        Key={"email": {"S": email}},
-        UpdateExpression=(
-            "SET confirmToken = :t, confirmExpires = :exp, pendingClientId = :cid, "
-            "createdAt = if_not_exists(createdAt, :now), unsubToken = if_not_exists(unsubToken, :unsub), "
-            "verified = if_not_exists(verified, :false), #ttl = :ttl"
-        ),
-        ExpressionAttributeNames={"#ttl": "ttl"},
-        ExpressionAttributeValues={
-            ":t": {"S": confirm_token},
-            ":exp": {"N": str(confirm_expires)},
-            ":cid": {"S": client_id},
-            ":now": {"N": str(now)},
-            ":unsub": {"S": unsub_token},
-            ":false": {"BOOL": False},
-            # Only unconfirmed rows carry a TTL; confirming clears it. Tied to
-            # the link's expiry so the row cannot vanish while its link is still
-            # advertised as valid.
-            ":ttl": {"N": str(confirm_expires)},
-        },
-    )
+    _ddb.update_item(**update)
 
     if not _bump_counter(email, "verifySent", MAX_VERIFY_EMAILS_PER_DAY):
         log.warning(json.dumps({"event": "verify_rate_limited"}))
@@ -518,20 +618,35 @@ def _subscribe(body):
         # hit its limit is not something a caller needs to learn.
         return _resp(202, {"status": "pending"})
 
+    _reset_counter_if_new_day(GLOBAL_COUNTER_KEY, "verifySent")
+    if not _bump_counter(GLOBAL_COUNTER_KEY, "verifySent", MAX_VERIFY_EMAILS_GLOBAL_PER_DAY):
+        # Logged at ERROR: this is either abuse or real demand outgrowing the
+        # cap, and both need a human to look.
+        log.error(json.dumps({"event": "verify_global_cap_reached",
+                              "cap": MAX_VERIFY_EMAILS_GLOBAL_PER_DAY}))
+        return _resp(202, {"status": "pending"})
+
     confirm_url = f"{SITE_BASE}/report/confirm?{urlencode({'token': confirm_token})}"
+    if rebind:
+        # Said plainly, because confirming this hands the address to another
+        # browser and stops reports from the one that had it.
+        intro = ("This address already receives SecureView reports. A different browser has "
+                 "asked to send them instead. Confirm only if you just set SecureView up "
+                 "again yourself — otherwise ignore this email and nothing changes.")
+    else:
+        intro = ("Click below to start receiving browsing reports at this address. "
+                 "If you did not ask for this, ignore this email — nothing will be sent.")
     _send_email(
         email,
         "Confirm your SecureView email reports",
         f"""<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;padding:24px;color:#0f172a;">
 <h1 style="font-size:18px;">Confirm your SecureView reports</h1>
-<p style="font-size:14px;color:#334155;">Click below to start receiving browsing reports at this address.
-If you did not ask for this, ignore this email — nothing will be sent.</p>
+<p style="font-size:14px;color:#334155;">{intro}</p>
 <p><a href="{html.escape(confirm_url)}" style="display:inline-block;background:#2563eb;color:#fff;
 padding:10px 18px;border-radius:8px;text-decoration:none;font-size:14px;">Confirm this address</a></p>
 <p style="font-size:12px;color:#94a3b8;">This link expires in 7 days.<br />{NO_REPLY_NOTE}</p>
 </body></html>""",
-        f"Confirm your SecureView reports: {confirm_url}\n\n"
-        f"If you did not ask for this, ignore this email — nothing will be sent.\n"
+        f"Confirm your SecureView reports: {confirm_url}\n\n{intro}\n"
         f"This link expires in 7 days.\n\n{NO_REPLY_NOTE_TEXT}",
     )
     log.info(json.dumps({"event": "verification_sent"}))
@@ -550,6 +665,22 @@ def _confirm(params):
     if not token or len(token) > 128:
         return _html_page("SecureView", "Link not valid",
                           "This confirmation link is missing or malformed.")
+
+    # A BARE FETCH MUST NOT CONFIRM.
+    #
+    # "Consent is the click" was not true while one GET was enough: mail clients
+    # and corporate link scanners fetch every URL in a message, so a stranger
+    # could subscribe someone else's address, let the victim's own scanner
+    # "click" the link, and end up owning a confirmed subscription to a mailbox
+    # they have never seen — and then send it mail. The emailed link now only
+    # renders a button; the button's URL is what confirms. Same shape, and same
+    # reason, as the unsubscribe link below.
+    if (params.get("confirm") or [""])[0] != "1":
+        link = f"{SITE_BASE}/report/confirm?{urlencode({'token': token, 'confirm': '1'})}"
+        return _html_page(
+            "SecureView", "Confirm this address?",
+            "Confirm that you want SecureView to email browsing reports to this "
+            f'address.<br /><br /><a href="{html.escape(link)}">Yes, send me reports</a>')
 
     # Scan is acceptable here: the table holds one row per subscriber, this runs
     # once per subscription, and indexing a single-use token would cost a GSI
@@ -577,13 +708,13 @@ def _confirm(params):
     # by the mail client, moments before the user clicked it themselves.
     already = (found.get("confirmedToken") or {}).get("S", "")
     verified = (found.get("verified") or {}).get("BOOL", False)
-    if (verified and already and hmac.compare_digest(already, token)
+    if (verified and _same_secret(already, token)
             and int((found.get("confirmedUntil") or {}).get("N", "0")) > _now()):
         return _confirmed_page()
 
     # The scan also matches spent tokens now, so the live token is checked
     # explicitly rather than inferred from the row having been found.
-    if not hmac.compare_digest((found.get("confirmToken") or {}).get("S", ""), token):
+    if not _same_secret((found.get("confirmToken") or {}).get("S", ""), token):
         return _html_page("SecureView", "Link not valid",
                           "This link has already been used, or it expired.")
 
@@ -622,10 +753,12 @@ def _status(body):
         return _resp(400, {"error": "email is required"})
     row = _get_row(email)
     if not row or not (_secret_matches(row, client_id)
-                       or hmac.compare_digest((row.get("pendingClientId") or {}).get("S", ""),
-                                              client_id if isinstance(client_id, str) else "")):
+                       or _same_secret((row.get("pendingClientId") or {}).get("S", ""), client_id)):
         return _resp(200, {"status": "unknown"})
-    verified = (row.get("verified") or {}).get("BOOL", False)
+    # "verified" only for the install that owns the row. An install that has
+    # merely ASKED to take over a confirmed address matches on pendingClientId
+    # and must be told pending, or it would believe it could send.
+    verified = (row.get("verified") or {}).get("BOOL", False) and _secret_matches(row, client_id)
     return _resp(200, {"status": "verified" if verified else "pending"})
 
 

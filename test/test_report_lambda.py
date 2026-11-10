@@ -79,6 +79,10 @@ class FakeDDB:
             row["pendingClientId"] = vals[":cid"]
             row.setdefault("unsubToken", vals[":unsub"])
             row.setdefault("verified", vals[":false"])
+            # Modelled because the bug was here: a TTL written onto a row that
+            # was already confirmed.
+            if "#ttl = :ttl" in UpdateExpression:
+                row["ttl"] = vals[":ttl"]
         if "lastSentDaily" in (UpdateExpression or ""):
             row["lastSentDaily"] = vals[":w"]
         if "lastSentWeekly" in (UpdateExpression or ""):
@@ -220,7 +224,7 @@ check("and its expiry is not pushed out",
 links = [d["Content"]["Simple"]["Body"]["Html"]["Data"] for d in FAKE_SES.sent]
 check("every email sent carries that same token",
       all(f"token={first_token}" in l for l in links), True)
-code, page = call("GET", "/report/confirm", query={"token": first_token})
+code, page = call("GET", "/report/confirm", query={"token": first_token, "confirm": "1"})
 check("the first email's link confirms successfully", "confirmed" in str(page).lower(), True)
 
 print("\n--- a link that was prefetched must still work for the user ---")
@@ -228,7 +232,7 @@ print("\n--- a link that was prefetched must still work for the user ---")
 # human clicks it. That fetch confirms the address and spends the token, so the
 # user's own click used to land on "Link not valid" while their subscription was
 # in fact live. This is the second half of the dead-link report.
-code, page = call("GET", "/report/confirm", query={"token": first_token})
+code, page = call("GET", "/report/confirm", query={"token": first_token, "confirm": "1"})
 check("a second fetch of the same link still reports success",
       "confirmed" in str(page).lower(), True)
 check_true("and does not claim the link is invalid",
@@ -239,12 +243,12 @@ check_true("the address stays confirmed",
 # The grace is time-boxed, not permanent: once it lapses the honest answer is
 # that the link is spent.
 FAKE_DDB.rows["twice@example.com"]["confirmedUntil"] = {"N": "1"}
-code, page = call("GET", "/report/confirm", query={"token": first_token})
+code, page = call("GET", "/report/confirm", query={"token": first_token, "confirm": "1"})
 check("once the grace has lapsed the link is reported as used",
       "not valid" in str(page).lower(), True)
 
 check("an unknown token is still rejected",
-      "not valid" in str(call("GET", "/report/confirm", query={"token": "z" * 40})[1]).lower(),
+      "not valid" in str(call("GET", "/report/confirm", query={"token": "z" * 40, "confirm": "1"})[1]).lower(),
       True)
 
 print("\n--- an unsubscribe link must not fire on a prefetch ---")
@@ -280,11 +284,11 @@ check("no report email sent", len(FAKE_SES.sent), 0)
 
 print("\n--- confirming the link ---")
 token = FAKE_DDB.rows["owner@example.com"]["confirmToken"]["S"]
-code, page = call("GET", "/report/confirm", query={"token": token})
+code, page = call("GET", "/report/confirm", query={"token": token, "confirm": "1"})
 check("confirm returns a page", code, 200)
 check_true("page says confirmed", "confirmed" in str(page).lower())
 check("row is now verified", FAKE_DDB.rows["owner@example.com"]["verified"]["BOOL"], True)
-code, page = call("GET", "/report/confirm", query={"token": "not-a-real-token"})
+code, page = call("GET", "/report/confirm", query={"token": "not-a-real-token", "confirm": "1"})
 check_true("a bogus token is rejected", "not valid" in str(page).lower())
 
 print("\n--- the client secret gates sending ---")
@@ -328,7 +332,9 @@ check("hostile payload still sends (as text)", out.get("status"), "sent")
 h = FAKE_SES.sent[0]["Content"]["Simple"]["Body"]["Html"]["Data"]
 check("no executable img tag survives", "<img src=x onerror" in h, False)
 check("no script tag survives", "<script>" in h, False)
-check_true("the hostname is shown escaped", "&lt;img src=x" in h)
+# Stronger than escaping it: a string that is not a hostname is not rendered.
+check_true("a markup 'hostname' is not rendered at all", "img src=x" not in h)
+check_true("the real hostnames beside it still are", "evil.example" in h)
 check_true("unknown category folded to Other", ">Other<" in h)
 check("negative seconds clamped to zero", "-500" in h, False)
 
@@ -390,6 +396,92 @@ check("the row is deleted", "owner@example.com" in FAKE_DDB.deleted, True)
 code, page = call("GET", "/report/unsubscribe",
                   query={"token": "bogus-token", "confirm": "1"})
 check_true("an unknown token gives the same page", "unsubscribed" in str(page).lower())
+
+print("\n--- a bare fetch of the confirm link must not confirm ---")
+# One GET used to be enough, and mail scanners issue that GET by themselves. A
+# stranger could subscribe someone else's address, let the victim's scanner
+# "click", and own a confirmed subscription to a mailbox they had never seen.
+call("POST", "/report/subscribe", {"email": "scan@example.com", "clientId": "s" * 32})
+stok = FAKE_DDB.rows["scan@example.com"]["confirmToken"]["S"]
+code, page = call("GET", "/report/confirm", query={"token": stok})
+check_true("a prefetch leaves the address unconfirmed",
+           FAKE_DDB.rows["scan@example.com"]["verified"]["BOOL"] is False)
+check_true("and shows a button instead", "confirm=1" in str(page))
+call("GET", "/report/confirm", query={"token": stok, "confirm": "1"})
+check_true("pressing the button confirms",
+           FAKE_DDB.rows["scan@example.com"]["verified"]["BOOL"] is True)
+
+print("\n--- re-subscribing must not put an expiry on a confirmed address ---")
+check_true("a confirmed row has no ttl", "ttl" not in FAKE_DDB.rows["scan@example.com"])
+FAKE_SES.sent.clear()
+code, out = call("POST", "/report/subscribe", {"email": "scan@example.com", "clientId": "s" * 32})
+check("the owning install is told it is already verified", out.get("status"), "verified")
+check("and no email is sent", len(FAKE_SES.sent), 0)
+check_true("and no ttl appears", "ttl" not in FAKE_DDB.rows["scan@example.com"])
+check_true("and no pending token is minted", "confirmToken" not in FAKE_DDB.rows["scan@example.com"])
+# A different install asking for the same address: allowed to ASK, but the
+# confirmed row must not start expiring, and the owner keeps working.
+code, out = call("POST", "/report/subscribe", {"email": "scan@example.com", "clientId": "z" * 32})
+check("a stranger gets the ordinary pending answer", (code, out.get("status")), (202, "pending"))
+check_true("the confirmed row still has no ttl", "ttl" not in FAKE_DDB.rows["scan@example.com"])
+check_true("the takeover email says what it is",
+           "different browser" in FAKE_SES.sent[-1]["Content"]["Simple"]["Body"]["Text"]["Data"])
+code, out = call("POST", "/report/status", {"email": "scan@example.com", "clientId": "s" * 32})
+check("the owner is still verified", out.get("status"), "verified")
+code, out = call("POST", "/report/status", {"email": "scan@example.com", "clientId": "z" * 32})
+check("the asker is only pending", out.get("status"), "pending")
+
+print("\n--- /status must not reveal who subscribes ---")
+# A confirmed row has no pendingClientId, and compare_digest("", "") is True,
+# so simply omitting clientId used to return "verified" for any subscriber.
+unknown = call("POST", "/report/status", {"email": "nobody@example.com"})
+for label, body in [
+    ("no clientId", {"email": "scan@example.com"}),
+    ("empty clientId", {"email": "scan@example.com", "clientId": ""}),
+    ("non-string clientId", {"email": "scan@example.com", "clientId": 7}),
+    ("non-ASCII clientId", {"email": "scan@example.com", "clientId": "é" * 20}),
+]:
+    check(f"{label}: same answer as an unknown address", call("POST", "/report/status", body), unknown)
+rep = {"frequency": "daily", "windowId": "daily:data_2026_11_08", "domains": []}
+check("send with a non-ASCII clientId: same answer as an unknown address",
+      call("POST", "/report/send", {"email": "scan@example.com", "clientId": "é" * 20, "report": rep}),
+      call("POST", "/report/send", {"email": "nobody@example.com", "clientId": "é" * 20, "report": rep}))
+
+print("\n--- a report cannot carry prose ---")
+FAKE_SES.sent.clear()
+code, out = call("POST", "/report/send", {"email": "scan@example.com", "clientId": "s" * 32, "report": {
+    "frequency": "daily", "windowId": "daily:data_2026_11_08",
+    "startDay": "URGENT: your account is suspended", "endDay": "URGENT: your account is suspended",
+    "siteCount": 60,
+    "categories": {"Technology": 7200, "Totally Made Up": 99999, "Finance & Banking": 1e999},
+    "domains": [
+        {"hostname": "Your mailbox is locked. Sign in at https://evil.example/login", "seconds": 5, "category": "Other"},
+        {"hostname": "evil.example/login", "seconds": 5, "category": "Other"},
+        {"hostname": "GitHub.com", "seconds": 3600, "category": "Technology"},
+        {"hostname": "[::1]", "seconds": 60, "category": "Technology"},
+        {"hostname": "xn--bcher-kva.example", "seconds": 1e999, "category": "Education"},
+    ]}})
+check("the report still sends", out.get("status"), "sent")
+mail = FAKE_SES.sent[-1]["Content"]["Simple"]
+text = mail["Body"]["Text"]["Data"]
+check("the subject is built from the window, not the payload",
+      mail["Subject"]["Data"], "SecureView Daily Report — 8 Nov 2026")
+check_true("free text is not rendered", "locked" not in text and "evil.example" not in text)
+check_true("real hostnames are, lowercased", "github.com (Technology)" in text and "[::1]" in text)
+check_true("an unknown category is dropped", "Totally Made Up" not in text)
+check_true("the client's category total is used", "Technology: 2h" in text)
+check_true("the site count covers sites not listed", "across 60 sites" in text and "and 57 more sites" in text)
+
+print("\n--- verification mail is capped across all addresses ---")
+rpt.MAX_VERIFY_EMAILS_GLOBAL_PER_DAY = 2
+FAKE_DDB.rows.pop(rpt.GLOBAL_COUNTER_KEY, None)
+FAKE_SES.sent.clear()
+for i in range(5):
+    code, out = call("POST", "/report/subscribe", {"email": f"flood{i}@example.com", "clientId": "f" * 32})
+check("only the capped number are mailed", len(FAKE_SES.sent), 2)
+check("and the caller cannot tell", (code, out.get("status")), (202, "pending"))
+rpt.MAX_VERIFY_EMAILS_GLOBAL_PER_DAY = 300
+FAKE_DDB.rows.pop(rpt.GLOBAL_COUNTER_KEY, None)
 
 print("\n--- POST routes require application/json (the no-cors defence) ---")
 FAKE_SES.sent.clear()

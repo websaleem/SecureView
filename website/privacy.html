@@ -35,7 +35,7 @@
     <h1 style="margin:0;">SecureView – Privacy Policy</h1>
   </div>
   <p class="meta">
-    Last updated: November 3, 2026 &nbsp;·&nbsp; Version 1.1.0<br />
+    Last updated: November 11, 2026 &nbsp;·&nbsp; Version 1.1.2<br />
     Developer: Saleem Khan &nbsp;·&nbsp;
     <a href="https://secureview.websaleem.com">https://secureview.websaleem.com</a>
   </p>
@@ -76,7 +76,6 @@
   </p>
   <p>When a classification request is made, the following fields are sent:</p>
   <ul>
-    <li>The page URL (query strings and fragments are stripped before transmission)</li>
     <li>The hostname</li>
     <li>The page title (if available)</li>
   </ul>
@@ -90,7 +89,10 @@
   </p>
   <p>
     Classification results are cached locally under the key <code>br_cat_cache</code>
-    so the same domain is never sent twice.
+    so a domain that has been classified is not sent again for 30 days. A domain the
+    service could not place is asked about again at most once a day. Page URLs — paths,
+    query strings and fragments — are never sent, and only the scheme and hostname of a
+    URL are stored on your device.
   </p>
   <p>
     <strong>No browsing data is sent if:</strong> the domain is already matched by the
@@ -171,7 +173,7 @@
   <h2>5. Your Controls</h2>
   <ul>
     <li><strong>Clear today's data</strong> — the 🗑 button in the popup permanently removes all browsing data for the current day.</li>
-    <li><strong>Exclude domains</strong> — add any domain to the Excluded Domains list in Settings. Excluded domains are never tracked or sent for classification. You can also exclude the currently active site instantly using the 🚫 button in the current-page bar; this simultaneously removes all tracking data recorded for that domain today. Tap 🔓 on an excluded site to restore tracking.</li>
+    <li><strong>Exclude domains</strong> — add any domain to the Excluded Domains list in Settings. Excluded domains are never tracked or sent for classification. You can also exclude the currently active site instantly using the 🚫 button in the current-page bar; this simultaneously removes the tracking data recorded for that domain on every stored day, and its entry in the classification cache. A domain on the list is also left out of email reports, including for days before you excluded it. Tap 🔓 on an excluded site to restore tracking.</li>
     <li><strong>Toggle AI categorization</strong> — disable the "Force AI Classification" setting to prevent any network requests for sites already matched by built-in rules.</li>
     <li><strong>Debug logging</strong> — logging is enabled by default in beta builds and disabled in production. It can be toggled in Settings and writes only to the local browser console.</li>
     <li><strong>Email reports</strong> — off by default. They require both an address and a confirmation click, and stop the moment you clear the address or use the unsubscribe link in a report.</li>

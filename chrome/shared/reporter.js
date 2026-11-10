@@ -14,6 +14,7 @@
 const REPORT_STATE_KEY = "report_state";
 const REPORT_EMAIL_KEY = "reportEmail";
 const REPORT_FREQ_KEY = "emailReportFreq";
+const REPORT_EXCLUDED_KEY = "excluded_domains";
 
 // Identifies this install to the backend. Random, stored locally, and sent with
 // every report call. It is what lets the backend tell "the install that
@@ -104,14 +105,21 @@ async function subscribeReportEmail(email) {
       Logger.warn("REPORTS", "Subscribe request failed");
       return "error";
     }
+    const status = body.status === "verified" ? "verified" : "pending";
+    const before = await _getReportState();
     await _setReportState({
       subscribedEmail: email,
-      status: body.status === "verified" ? "verified" : "pending",
-      sent: {},            // a new address has sent nothing yet
+      status,
+      // A genuinely new address has sent nothing yet. Coming BACK to one this
+      // install already confirmed keeps its history, or this morning's report
+      // would go out a second time.
+      sent: before.subscribedEmail === email ? before.sent : {},
       lastError: "",
     });
-    Logger.info("REPORTS", "Verification requested for the saved address");
-    return "pending";
+    Logger.info("REPORTS", status === "verified"
+      ? "Address is already confirmed for this install"
+      : "Verification requested for the saved address");
+    return status;
   } catch (e) {
     await _setReportState({ lastError: "network" });
     Logger.warn("REPORTS", `Subscribe failed: ${e?.message}`);
@@ -153,9 +161,10 @@ async function refreshReportStatus() {
  * is different, so nothing stacks up.
  */
 async function maybeSendReport(now = new Date()) {
-  const stored = await chrome.storage.local.get([REPORT_EMAIL_KEY, REPORT_FREQ_KEY]);
+  const stored = await chrome.storage.local.get([REPORT_EMAIL_KEY, REPORT_FREQ_KEY, REPORT_EXCLUDED_KEY]);
   const email = typeof stored[REPORT_EMAIL_KEY] === "string" ? stored[REPORT_EMAIL_KEY].trim() : "";
   const frequency = stored[REPORT_FREQ_KEY] === "weekly" ? "weekly" : "daily";
+  const excluded = Array.isArray(stored[REPORT_EXCLUDED_KEY]) ? stored[REPORT_EXCLUDED_KEY] : [];
   if (!email) return "no_email";
 
   if (!isWithinSendWindow(frequency, now)) return "outside_window";
@@ -175,7 +184,7 @@ async function maybeSendReport(now = new Date()) {
   // Read only the days this window needs.
   const w = reportWindow(frequency, now);
   const byKey = await chrome.storage.local.get(w.dayKeys);
-  const report = buildReportData(frequency, byKey, now);
+  const report = buildReportData(frequency, byKey, now, excluded);
 
   // Nothing tracked at all: no email. A report saying "0s across 0 sites" is
   // noise, and the window is still marked sent so it is not reconsidered all
@@ -247,8 +256,9 @@ function isDevBuild() {
 async function sendTestReport(now = new Date()) {
   if (!isDevBuild()) return "not_dev";
 
-  const stored = await chrome.storage.local.get([REPORT_EMAIL_KEY, REPORT_FREQ_KEY]);
+  const stored = await chrome.storage.local.get([REPORT_EMAIL_KEY, REPORT_EXCLUDED_KEY]);
   const email = typeof stored[REPORT_EMAIL_KEY] === "string" ? stored[REPORT_EMAIL_KEY].trim() : "";
+  const excluded = Array.isArray(stored[REPORT_EXCLUDED_KEY]) ? stored[REPORT_EXCLUDED_KEY] : [];
   if (!email) return "no_email";
 
   const state = await _getReportState();
@@ -260,27 +270,24 @@ async function sendTestReport(now = new Date()) {
   // Today's key, built the same way as every other day key.
   const todayKey = reportDayKey(now);
   const byKey = await chrome.storage.local.get([todayKey]);
-  const day = byKey[todayKey];
-  if (!day || !Object.keys(day.domains || {}).length) return "nothing_tracked";
+  // Same aggregation, cap and exclusion filter as the scheduled report — only
+  // the window differs.
+  const sum = summariseDays([todayKey], byKey, excluded);
+  if (sum.totalSeconds <= 0) return "nothing_tracked";
 
-  const report = buildReportData("daily", byKey, now);
-  // buildReportData computes the window from `now`, which for "daily" is
-  // yesterday. Re-point it at today, which is the data actually being sent.
-  report.windowId = `daily:${todayKey}`;
-  report.startDay = todayKey;
-  report.endDay = todayKey;
-  report.daysCovered = 1;
-  report.daysPresent = 1;
-  const domains = Object.values(day.domains || {})
-    .filter((d) => d && d.hostname)
-    .map((d) => ({ hostname: d.hostname, seconds: d.seconds || 0, category: d.category || "Other" }))
-    .sort((a, b) => b.seconds - a.seconds);
-  report.domains = domains;
-  report.totalSeconds = domains.reduce((n, d) => n + d.seconds, 0);
-  report.categories = domains.reduce((acc, d) => {
-    acc[d.category] = (acc[d.category] || 0) + d.seconds;
-    return acc;
-  }, {});
+  const report = {
+    frequency: "daily",
+    windowId: `daily:${todayKey}`,
+    startDay: todayKey,
+    endDay: todayKey,
+    daysCovered: 1,
+    daysPresent: 1,
+    daysMissing: 0,
+    totalSeconds: sum.totalSeconds,
+    categories: sum.categories,
+    siteCount: sum.siteCount,
+    domains: sum.domains,
+  };
 
   const fresh = await _getReportState();
   try {

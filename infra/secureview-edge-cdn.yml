@@ -145,6 +145,33 @@ Resources:
             CloudWatchMetricsEnabled: true
             MetricName: !Sub "secureview${Environment}RateLimit"
             SampledRequestsEnabled: true
+        # A much tighter limit on the one route that makes us SEND MAIL to an
+        # address the caller chooses. The general limit above would let a single
+        # IP request 300 verification emails every five minutes. Nobody
+        # legitimately subscribes more than a couple of addresses; 10 is WAF's
+        # minimum. The Lambda also enforces a global daily cap, which is what
+        # holds when the requests come from many addresses instead of one.
+        - Name: RateLimitSubscribeByIP
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 10
+              AggregateKeyType: IP
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  SearchString: /report/subscribe
+                  FieldToMatch:
+                    UriPath: {}
+                  PositionalConstraint: EXACTLY
+                  TextTransformations:
+                    - Priority: 0
+                      Type: NONE
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "secureview${Environment}SubscribeRateLimit"
+            SampledRequestsEnabled: true
 
   # ───────── Lambda@Edge ─────────
   EdgeRole:

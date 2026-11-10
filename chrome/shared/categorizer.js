@@ -13,7 +13,7 @@
 // x-origin-token that Lambda@Edge swapped for an x-api-key; neither exists any
 // more, so do not add either header here.
 //
-// CloudFront endpoint input:  { "url": "...", "hostname": "...", "title": "..." }
+// CloudFront endpoint input:  { "hostname": "...", "title": "..." }
 // CloudFront endpoint output: { "category": "Technology" }
 
 const BR_CACHE_KEY    = "br_cat_cache";
@@ -21,6 +21,18 @@ const FORCE_CF_KEY    = "force_cloudfront";
 const BR_TIMEOUT_MS   = 10000;  // slightly higher than API Gateway direct to absorb Lambda@Edge cold starts
 const CACHE_VERSION   = 1;
 const CACHE_TTL_MS    = 30 * 24 * 60 * 60 * 1000; // 30 days
+// How long the backend's "Other" is remembered. Much shorter than a real answer
+// — it is a non-answer, and pinning it for 30 days once hid a site from a
+// category added later — but not zero: with no memory at all, every site the
+// backend could not place was re-sent on every one-minute tick and every title
+// change, each time carrying the current page title. Measured: 11 requests in
+// 10 minutes for one open tab.
+const OTHER_TTL_MS    = 24 * 60 * 60 * 1000;
+// After a failed call (timeout, 4xx/5xx, offline) leave the host alone for a
+// while instead of retrying three times a minute per open tab. In memory only:
+// a worker restart forgetting it is fine.
+const FAILURE_BACKOFF_MS = 10 * 60 * 1000;
+const _failedUntil = new Map();
 // Hard ceiling on cached hostnames. At roughly 70 bytes per entry this caps
 // the cache near 350KB, well inside the ~10MB chrome.storage.local quota that
 // the day records also share.
@@ -49,18 +61,6 @@ function _isPlaceholderUrl(url) {
   return /your-cloudfront-id|<.*>|example\.com/.test(url);
 }
 
-// Strip query and fragment before sending the URL to the categorize endpoint.
-// Path is kept (it can carry useful categorization signal — e.g. /finance vs
-// /sports), but ?query and #hash often carry auth tokens, search terms, and
-// session ids that have no business leaving the device.
-function _safeUrlForApi(url) {
-  try {
-    const u = new URL(url);
-    return `${u.protocol}//${u.host}${u.pathname}`;
-  } catch {
-    return url;
-  }
-}
 
 // ─── Category cache ───────────────────────────────────────────────────────────
 
@@ -127,7 +127,8 @@ function readCachedCategory(cache, hostname) {
   if (!entry) return null;
   if (typeof entry === "string") return entry; // legacy shape — accept once, will be rewritten on next miss path
   if (entry.v !== CACHE_VERSION) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) return null;
+  const ttl = entry.category === "Other" ? OTHER_TTL_MS : CACHE_TTL_MS;
+  if (Date.now() - entry.ts > ttl) return null;
   return entry.category;
 }
 
@@ -153,8 +154,12 @@ async function classifyWithCloudFront(url, hostname, title) {
   const cached = readCachedCategory(cache, hostname);
   if (cached) {
     Logger.debug(LOG_CAT, `Cache hit: ${hostname} → ${cached}`);
-    return cached;
+    // A remembered "Other" means "asked recently, no answer" — the caller
+    // falls back to the local rules, exactly as it would on a fresh "Other".
+    return cached === "Other" ? null : cached;
   }
+
+  if ((_failedUntil.get(hostname) || 0) > Date.now()) return null;
 
   const config = getCFConfig();
   if (_isPlaceholderUrl(config?.url)) {
@@ -173,11 +178,15 @@ async function classifyWithCloudFront(url, hostname, title) {
     const response = await fetchWithRetry(config.url, {
       method:  "POST",
       headers,
-      body:    JSON.stringify({ url: _safeUrlForApi(url), hostname, title: title || "" })
+      // Hostname and title only. The URL path used to be sent as well; the
+      // backend never read it, and paths carry document ids, usernames and
+      // reset tokens that have no business leaving the device.
+      body:    JSON.stringify({ hostname, title: title || "" })
     });
 
     if (!response.ok) {
       Logger.warn(LOG_CAT, `CloudFront returned HTTP ${response.status} for: ${hostname}`);
+      _failedUntil.set(hostname, Date.now() + FAILURE_BACKOFF_MS);
       return null;
     }
 
@@ -196,13 +205,15 @@ async function classifyWithCloudFront(url, hostname, title) {
     }
 
     if (category === "Other") {
-      Logger.info(LOG_CAT, `Backend returned Other for ${hostname} — not cached, will retry later`);
+      Logger.info(LOG_CAT, `Backend returned Other for ${hostname} — remembered for a day`);
+      await setCachedCategory(hostname, "Other");
       return null;
     }
 
     Logger.warn(LOG_CAT, `Empty category returned for: ${hostname}`);
   } catch (e) {
     Logger.warn(LOG_CAT, `CloudFront call failed for: ${hostname}`, e?.message);
+    _failedUntil.set(hostname, Date.now() + FAILURE_BACKOFF_MS);
   }
 
   return null;

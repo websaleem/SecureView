@@ -55,7 +55,11 @@
   let activityTimeout = null;
   const ACTIVITY_DEBOUNCE_MS = 10000; // Report activity every 10s max
 
-  function reportActivity() {
+  function reportActivity(event) {
+    // Only input the browser vouches for. A page can dispatch its own
+    // mousemove/scroll events, and without this could keep itself counted as
+    // "attended" for as long as it stayed in the foreground.
+    if (event && event.isTrusted === false) return;
     if (activityTimeout) return; // Already scheduled
     Logger.debug(LOG, `User activity detected on: ${location.hostname}`);
     chrome.runtime.sendMessage({ type: "USER_ACTIVE" }).catch(() => {});

@@ -838,7 +838,14 @@ async function init() {
   // Writes only when the address is usable. An empty field is a legitimate
   // "reports off" state and saves; a malformed one reports the problem and
   // leaves whatever was last stored untouched.
-  async function saveEmail({ silent = false } = {}) {
+  // `subscribe: false` saves the text without asking the backend to mail it.
+  //
+  // The debounced save runs 600ms after the last keystroke, which is mid-typing
+  // as often as not — and plenty of half-typed addresses are valid ones. Pausing
+  // at "name@gmail.co" on the way to ".com" sent a confirmation email to a
+  // stranger at a different domain. Only a deliberate act (Enter, or leaving the
+  // field) sends mail now.
+  async function saveEmail({ silent = false, subscribe = true } = {}) {
     const email = reportEmailInput.value.trim();
     if (email && !EMAIL_RE.test(email)) {
       if (!silent) setReportMsg("Not a valid email address yet.", "error");
@@ -872,6 +879,12 @@ async function init() {
         return true;
       }
 
+      if (!subscribe) {
+        setReportMsg("Press Enter to send the confirmation email.", "ok");
+        await paintReportStatus();
+        return true;
+      }
+
       setReportMsg("Saved. Sending a confirmation email…", "ok");
       const res = await chrome.runtime
         .sendMessage({ type: "SUBSCRIBE_REPORT_EMAIL", email })
@@ -899,7 +912,7 @@ async function init() {
   reportEmailInput.addEventListener("input", () => {
     clearTimeout(_emailTimer);
     setReportMsg("", null);
-    _emailTimer = setTimeout(() => saveEmail({ silent: true }), EMAIL_SAVE_DEBOUNCE_MS);
+    _emailTimer = setTimeout(() => saveEmail({ silent: true, subscribe: false }), EMAIL_SAVE_DEBOUNCE_MS);
   });
 
   // Leaving the field or pressing Enter commits immediately, and here a
@@ -946,8 +959,18 @@ async function init() {
 
   document.getElementById("exclusion-add-btn").addEventListener("click", async () => {
     const input = document.getElementById("exclusion-input");
-    const raw = input.value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-    if (!raw) return;
+    // Reduced to exactly what the tracker compares against: a bare hostname
+    // with no scheme, path, port or leading "www.". The tracker strips "www."
+    // before it looks a site up, so an entry saved as "www.example.com" — or
+    // with a port — could never match and silently excluded nothing.
+    const raw = input.value.trim().toLowerCase()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+      .replace(/[/?#].*$/, "")
+      .replace(/^[^@]*@/, "")
+      .replace(/:\d+$/, "")
+      .replace(/^www\./, "")
+      .replace(/\.$/, "");
+    if (!raw || /\s/.test(raw)) return;
     const settings = await loadSettings();
     if (settings.excludedDomains.includes(raw)) {
       input.value = "";

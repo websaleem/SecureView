@@ -114,31 +114,39 @@ function isWithinSendWindow(frequency, now = new Date()) {
   return true;
 }
 
-/**
- * Aggregate stored days into the payload a report is rendered from.
- *
- * `byKey` maps a day key to that day's stored record. Days absent from storage
- * contribute nothing and are counted in `daysMissing`, so a report can say it
- * covers five of seven days instead of quietly presenting a smaller total as
- * the whole week.
- *
- * Domain seconds are summed across days. Category labels are taken from the
- * most recent visit, matching how the popup aggregates a week: a domain
- * reclassified mid-window reports under its latest category rather than being
- * split across two.
- */
-function buildReportData(frequency, byKey, now = new Date()) {
-  const w = reportWindow(frequency, now);
+// How many sites a report payload carries, and how many bytes they may take.
+//
+// The email shows the top 25, so sending every site was never needed — and it
+// stopped being possible: production's WAF refuses request bodies over 8 KB,
+// which about ninety sites reach. A normal week is more than that, so weekly
+// reports were blocked outright in production while passing in dev, where the
+// WAF has no such rule. The byte budget is the real guard (a hostname can be
+// 253 characters); the count is just the common case.
+const MAX_REPORT_DOMAINS = 40;
+const MAX_REPORT_DOMAIN_BYTES = 5000;
 
+/**
+ * Sum the given days into per-site and per-category totals.
+ *
+ * Shared by the scheduled report and the dev test report so the two cannot
+ * drift. `excluded` is the user's exclusion list: a site excluded AFTER it was
+ * visited still has earlier days in storage, and those must not be mailed.
+ * Sites with no whole second of tracked time are left out — an entry is created
+ * the moment a page is categorised, before any time has accrued.
+ *
+ * Totals and the site count cover EVERY site; `domains` is only the top few.
+ */
+function summariseDays(dayKeys, byKey, excluded = []) {
+  const skip = new Set(excluded || []);
   const domains = {};
   let daysPresent = 0;
 
-  for (const key of w.dayKeys) {
+  for (const key of dayKeys) {
     const day = byKey[key];
     if (!day) continue;
     daysPresent++;
     for (const d of Object.values(day.domains || {})) {
-      if (!d || !d.hostname) continue;
+      if (!d || !d.hostname || skip.has(d.hostname)) continue;
       const acc = domains[d.hostname] || {
         hostname: d.hostname,
         seconds: 0,
@@ -146,6 +154,7 @@ function buildReportData(frequency, byKey, now = new Date()) {
         lastVisit: 0,
       };
       acc.seconds += d.seconds || 0;
+      // Category from the most recent visit, matching the popup's week view.
       if ((d.lastVisit || 0) >= acc.lastVisit) {
         acc.lastVisit = d.lastVisit || 0;
         acc.category = d.category || acc.category;
@@ -154,20 +163,44 @@ function buildReportData(frequency, byKey, now = new Date()) {
     }
   }
 
-  // Categories are derived from the aggregated domains rather than summed from
-  // each day's own category totals, so a reclassified domain cannot be counted
-  // under both labels.
+  const all = Object.values(domains)
+    .filter((d) => d.seconds > 0)
+    .sort((a, b) => b.seconds - a.seconds);
+
   const categories = {};
   let totalSeconds = 0;
-  for (const d of Object.values(domains)) {
+  for (const d of all) {
     const cat = d.category || "Other";
     categories[cat] = (categories[cat] || 0) + d.seconds;
     totalSeconds += d.seconds;
   }
 
-  const topDomains = Object.values(domains)
-    .sort((a, b) => b.seconds - a.seconds)
-    .map(({ hostname, seconds, category }) => ({ hostname, seconds, category }));
+  const top = [];
+  let bytes = 0;
+  for (const { hostname, seconds, category } of all) {
+    if (top.length >= MAX_REPORT_DOMAINS) break;
+    const row = { hostname, seconds, category };
+    bytes += JSON.stringify(row).length + 1;
+    if (bytes > MAX_REPORT_DOMAIN_BYTES) break;
+    top.push(row);
+  }
+
+  return { daysPresent, totalSeconds, categories, siteCount: all.length, domains: top };
+}
+
+/**
+ * The payload a scheduled report is rendered from.
+ *
+ * `byKey` maps a day key to that day's stored record. Days absent from storage
+ * contribute nothing and are counted in `daysMissing`, so a report can say it
+ * covers five of seven days instead of quietly presenting a smaller total as
+ * the whole week.
+ */
+function buildReportData(frequency, byKey, now = new Date(), excluded = []) {
+  const w = reportWindow(frequency, now);
+  const sum = summariseDays(w.dayKeys, byKey, excluded);
+  const { daysPresent, totalSeconds, categories } = sum;
+  const topDomains = sum.domains;
 
   return {
     frequency: w.frequency,
@@ -179,6 +212,7 @@ function buildReportData(frequency, byKey, now = new Date()) {
     daysMissing: w.dayKeys.length - daysPresent,
     totalSeconds,
     categories,
+    siteCount: sum.siteCount,
     domains: topDomains,
   };
 }
