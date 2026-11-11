@@ -107,6 +107,33 @@ def main():
         sys.exit("  refusing: /categorize has no Lambda@Edge association to copy")
 
     existing = next((b for b in items if b.get("PathPattern") == PATH_PATTERN), None)
+
+    # NEVER MOVE AN EXISTING REPORT BEHAVIOUR TO AN OLDER SIGNER.
+    #
+    # This script clones /categorize, signer and all. Where /categorize is
+    # deliberately left on an older signer — production, where repointing the
+    # classifier was deferred — a routine re-run copied that OLD version onto
+    # /report/*, replacing the one that knows the report routes. Every report
+    # route then answered 404 from the edge while the stack reported success.
+    # That happened in production on a deploy that changed only Lambda code.
+    #
+    # So without an explicit REPORT_SIGNER_ARN, an existing behaviour keeps
+    # whichever version of the same function is newer: its own, or
+    # /categorize's. A re-run can move reports forward, never back.
+    if existing is not None and not override:
+        current = ((existing.get("LambdaFunctionAssociations") or {}).get("Items") or [{}])[0].get("LambdaFunctionARN", "")
+
+        def split(arn):
+            base, _, version = arn.rpartition(":")
+            return (base, int(version)) if version.isdigit() else (arn, -1)
+
+        cur_base, cur_ver = split(current)
+        new_base, new_ver = split(signer)
+        if current and cur_base == new_base and cur_ver > new_ver:
+            print(f"    keeping {PATH_PATTERN} on its newer signer (v{cur_ver}); "
+                  f"{CLONE_FROM} is on v{new_ver}")
+            desired["LambdaFunctionAssociations"] = existing["LambdaFunctionAssociations"]
+
     if existing is None:
         # Ahead of any catch-all, or "*" swallows it.
         items.insert(0, desired)
