@@ -53,6 +53,19 @@ SITE_BASE = os.environ["SITE_BASE_URL"].rstrip("/")   # for confirm/unsubscribe 
 # will otherwise reply and hear nothing, which is exactly how legitimate mail
 # starts getting reported as spam. Point them at the form that is monitored.
 SUPPORT_URL = f"{SITE_BASE}/contact-support.html"
+
+# Links and artwork for the report email. The logo is served by the same site
+# the links point at, so a dev report shows the dev site's copy and nothing in
+# the mail reaches for a third-party host. It is a small file made for email
+# (website/images/email-logo.png) — the site's own icon.png is 2 MB.
+LOGO_URL = f"{SITE_BASE}/images/email-logo.png"
+PRIVACY_URL = f"{SITE_BASE}/privacy.html"
+TERMS_URL = f"{SITE_BASE}/terms.html"
+# The beta listing for the dev environment, the public one otherwise — the same
+# split the website's own "Add to Chrome" buttons make.
+_STORE_ID = ("hiopfkjjakmgoodhldhppaokdaceilbd" if "//dev." in SITE_BASE
+             else "ojhmodiiehcingcnhlglenenoemmegim")
+INSTALL_URL = os.environ.get("STORE_URL") or f"https://chromewebstore.google.com/detail/{_STORE_ID}"
 NO_REPLY_NOTE = ("This address is not monitored — replies are not read. "
                  f'Questions go to <a href="{SUPPORT_URL}">Contact Support</a>.')
 NO_REPLY_NOTE_TEXT = ("This address is not monitored — replies are not read. "
@@ -114,6 +127,25 @@ KNOWN_CATEGORIES = {
     "Arts & Design", "Automotive", "Science & Nature",
     "Religion & Spirituality", "Telecommunications",
     "Utilities & Energy", "Other",
+    # The extension's built-in rules label banks "Finance"; only the AI
+    # classifier says "Finance & Banking". Without this entry every bank matched
+    # by the local rules was folded into "Other" in the email.
+    "Finance",
+}
+
+# One colour per category for the bars and dots in the report, matching the
+# popup where the two share a name. Anything missing falls back to grey.
+CATEGORY_COLOURS = {
+    "News & Media": "#E74C3C", "Social Media": "#3498DB", "Shopping": "#E67E22",
+    "Technology": "#2ECC71", "Finance & Banking": "#27AE60", "Finance": "#27AE60",
+    "Education": "#F39C12", "Entertainment": "#9B59B6", "Government": "#607D8B",
+    "Health & Fitness": "#16A085", "Travel": "#1ABC9C", "Sports": "#FF9800",
+    "Food & Dining": "#E57373", "Productivity": "#EC4899", "Gaming": "#C0392B",
+    "Adult Content": "#B71C1C", "Malware / Phishing": "#D32F2F", "Personal": "#5D6D7E",
+    "Jobs & Careers": "#5C6BC0", "Business": "#34495E", "Real Estate": "#795548",
+    "Arts & Design": "#AB47BC", "Automotive": "#546E7A", "Science & Nature": "#43A047",
+    "Religion & Spirituality": "#8D6E63", "Telecommunications": "#00ACC1",
+    "Utilities & Energy": "#F1C40F", "Other": "#94A3B8",
 }
 
 # What a hostname may look like in a report. The client sends this field and it
@@ -431,67 +463,224 @@ def _sanitise_report(payload):
     }
 
 
+def _pct(part, whole):
+    return int(round(100.0 * part / whole)) if whole > 0 else 0
+
+
 def _render_email(report, unsub_url):
+    """The report as (subject, html, text).
+
+    HTML for mail, not for a browser: tables for layout, every style inline,
+    widths as attributes, colours as six-digit hex. Outlook renders with Word's
+    engine and Gmail strips <style> in several contexts, so anything cleverer
+    than this arrives broken for somebody. The only image is the logo, and the
+    mail reads correctly with images blocked — which is the default in many
+    clients.
+
+    Everything interpolated below is either a number computed here, a category
+    name from the fixed list, or a hostname that passed HOSTNAME_RE, and is
+    escaped regardless.
+    """
     freq = "Daily" if report["frequency"] == "daily" else "Weekly"
     start, end = report["startDay"], report["endDay"]
     period = _pretty_day(start) if start == end else f"{_pretty_day(start)} – {_pretty_day(end)}"
+    esc = html.escape
+
+    total = report["totalSeconds"]
+    sites = report["siteCount"]
+    cats = sorted(report["categories"].items(), key=lambda kv: -kv[1])
+    top_cat = cats[0][0] if cats else "—"
+    year = time.strftime("%Y", time.gmtime())
+
+    font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
     missing = report["daysCovered"] - report["daysPresent"]
     caveat = ""
     if missing > 0:
         # Said plainly rather than omitted: a smaller total with no explanation
         # reads as lost time.
-        caveat = (f'<p class="note">No activity was recorded on {missing} of the '
-                  f'{report["daysCovered"]} days in this period.</p>')
+        caveat = f"""
+        <tr><td style="padding:0 24px 8px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td bgcolor="#FFFBEB" style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:12px 16px;font-family:{font};font-size:13px;line-height:1.5;color:#92400E;">
+              No activity was recorded on {missing} of the {report["daysCovered"]} days in this period.
+            </td></tr>
+          </table>
+        </td></tr>"""
 
-    cat_rows = "".join(
-        f'<tr><td>{html.escape(name)}</td><td class="n">{_fmt_duration(secs)}</td></tr>'
-        for name, secs in sorted(report["categories"].items(), key=lambda kv: -kv[1])
-    ) or '<tr><td colspan="2" class="empty">Nothing tracked in this period.</td></tr>'
+    def stat(label, value, width, last=False, nowrap=True):
+        # Widths are uneven on purpose: the category name is the long one, and
+        # at phone width three equal tiles wrapped "7h 35m" onto two lines.
+        pad = "0" if last else "0 8px 0 0"
+        wrap = "white-space:nowrap;" if nowrap else ""
+        return f"""
+              <td width="{width}%" valign="top" style="padding:{pad};">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr><td bgcolor="#F1F5F9" style="background:#F1F5F9;border-radius:12px;padding:14px 12px;font-family:{font};">
+                    <div style="font-size:10px;letter-spacing:0.5px;text-transform:uppercase;color:#64748B;white-space:nowrap;">{label}</div>
+                    <div style="font-size:18px;line-height:1.3;font-weight:700;color:#0F172A;padding-top:4px;{wrap}">{value}</div>
+                  </td></tr>
+                </table>
+              </td>"""
 
-    dom_rows = "".join(
-        f'<tr><td>{html.escape(d["hostname"])}</td>'
-        f'<td>{html.escape(d["category"])}</td>'
-        f'<td class="n">{_fmt_duration(d["seconds"])}</td></tr>'
-        for d in report["domains"][:MAX_DOMAINS_IN_EMAIL]
-    ) or '<tr><td colspan="3" class="empty">No sites tracked in this period.</td></tr>'
+    # ── By category: a name, a share, and a bar drawn with two table cells ──
+    cat_rows = ""
+    for name, secs in cats:
+        colour = CATEGORY_COLOURS.get(name, "#94A3B8")
+        pct = _pct(secs, total)
+        # At least a sliver, so a small category still shows a bar.
+        fill = max(2, min(100, pct))
+        rest = 100 - fill
+        rest_cell = (f'<td width="{rest}%" bgcolor="#E2E8F0" style="background:#E2E8F0;'
+                     f'font-size:0;line-height:0;height:8px;">&nbsp;</td>') if rest > 0 else ""
+        cat_rows += f"""
+            <tr>
+              <td style="padding:10px 0 4px;font-family:{font};font-size:14px;color:#0F172A;">
+                <span style="color:{colour};font-size:14px;">&#9679;</span>&nbsp; {esc(name)}
+              </td>
+              <td align="right" style="padding:10px 0 4px;font-family:{font};font-size:14px;color:#0F172A;white-space:nowrap;">
+                <strong>{_fmt_duration(secs)}</strong> <span style="color:#94A3B8;font-size:12px;">&nbsp;{pct}%</span>
+              </td>
+            </tr>
+            <tr><td colspan="2" style="padding:0 0 6px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:4px;overflow:hidden;">
+                <tr>
+                  <td width="{fill}%" bgcolor="{colour}" style="background:{colour};font-size:0;line-height:0;height:8px;">&nbsp;</td>
+                  {rest_cell}
+                </tr>
+              </table>
+            </td></tr>"""
+    if not cat_rows:
+        cat_rows = (f'<tr><td style="padding:12px 0;font-family:{font};font-size:14px;'
+                    f'color:#64748B;">Nothing tracked in this period.</td></tr>')
 
-    shown = min(len(report["domains"]), MAX_DOMAINS_IN_EMAIL)
-    sites = report["siteCount"]
+    # ── Top sites: rank, site and category, time ───────────────────────────
+    shown_domains = report["domains"][:MAX_DOMAINS_IN_EMAIL]
+    dom_rows = ""
+    for i, d in enumerate(shown_domains, 1):
+        colour = CATEGORY_COLOURS.get(d["category"], "#94A3B8")
+        border = "" if i == len(shown_domains) else "border-bottom:1px solid #F1F5F9;"
+        dom_rows += f"""
+            <tr>
+              <td width="28" valign="top" style="{border}padding:11px 0;font-family:{font};font-size:12px;color:#94A3B8;">{i}</td>
+              <td valign="top" style="{border}padding:10px 8px 10px 0;font-family:{font};">
+                <div style="font-size:14px;color:#0F172A;font-weight:600;word-break:break-all;">{esc(d["hostname"])}</div>
+                <div style="font-size:12px;color:#64748B;padding-top:2px;"><span style="color:{colour};">&#9679;</span> {esc(d["category"])}</div>
+              </td>
+              <td align="right" valign="top" style="{border}padding:11px 0;font-family:{font};font-size:14px;color:#0F172A;font-weight:600;white-space:nowrap;">{_fmt_duration(d["seconds"])}</td>
+            </tr>"""
+    if not dom_rows:
+        dom_rows = (f'<tr><td style="padding:12px 0;font-family:{font};font-size:14px;'
+                    f'color:#64748B;">No sites tracked in this period.</td></tr>')
+
+    shown = len(shown_domains)
     more = sites - shown
-    more_note = f'<p class="note">and {more} more site{"s" if more != 1 else ""}.</p>' if more > 0 else ""
+    more_note = ""
+    if more > 0:
+        more_note = (f'<tr><td colspan="3" style="padding:12px 0 0;font-family:{font};font-size:13px;'
+                     f'color:#64748B;">and {more} more site{"s" if more != 1 else ""}.</td></tr>')
+
+    def heading(text):
+        return (f'<tr><td style="padding:24px 24px 4px;font-family:{font};font-size:12px;'
+                f'letter-spacing:0.8px;text-transform:uppercase;font-weight:700;color:#2563EB;">{text}</td></tr>')
+
+    preheader = (f"{_fmt_duration(total)} across {sites} site{'s' if sites != 1 else ''}"
+                 f"{' — mostly ' + top_cat if cats else ''}.")
 
     html_body = f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8" /><title>SecureView {freq} Report</title></head>
-<body style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
-<div style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:32px;">
-  <h1 style="font-size:20px;margin:0 0 4px;">SecureView {freq} Report</h1>
-  <p style="color:#64748b;font-size:13px;margin:0 0 24px;">{html.escape(period)}</p>
+<html lang="en"><head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light" />
+<meta name="supported-color-schemes" content="light" />
+<title>SecureView {freq} Report</title>
+</head>
+<body style="margin:0;padding:0;background:#EEF2F7;" bgcolor="#EEF2F7">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#EEF2F7;font-size:1px;line-height:1px;">{esc(preheader)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#EEF2F7" style="background:#EEF2F7;">
+  <tr><td align="center" style="padding:32px 12px;">
 
-  <p style="font-size:15px;margin:0 0 24px;">
-    Total tracked time: <strong>{_fmt_duration(report["totalSeconds"])}</strong>
-    across <strong>{sites}</strong> site{"s" if sites != 1 else ""}.
-  </p>
-  {caveat}
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
 
-  <h2 style="font-size:14px;margin:24px 0 8px;">By category</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">{cat_rows}</table>
+      <!-- Header -->
+      <tr><td bgcolor="#2563EB" style="background:#2563EB;border-radius:16px 16px 0 0;font-size:0;line-height:0;height:6px;">&nbsp;</td></tr>
+      <tr><td align="center" bgcolor="#FFFFFF" style="background:#FFFFFF;padding:28px 32px 22px;border-bottom:1px solid #E2E8F0;">
+        <a href="{esc(SITE_BASE)}" style="text-decoration:none;">
+          <img src="{esc(LOGO_URL)}" width="108" height="90" alt="SecureView" style="display:block;border:0;outline:none;width:108px;height:90px;margin:0 auto;font-family:{font};font-size:20px;font-weight:700;color:#1D4ED8;" />
+        </a>
+        <div style="font-family:{font};font-size:22px;line-height:1.3;font-weight:700;color:#0F172A;padding-top:16px;">Your {freq} Report</div>
+        <div style="font-family:{font};font-size:14px;line-height:1.4;color:#2563EB;padding-top:4px;">{esc(period)}</div>
+      </td></tr>
 
-  <h2 style="font-size:14px;margin:24px 0 8px;">Top sites</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">{dom_rows}</table>
-  {more_note}
+      <!-- Body -->
+      <tr><td bgcolor="#FFFFFF" style="background:#FFFFFF;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-  <p style="color:#94a3b8;font-size:11px;margin:28px 0 0;border-top:1px solid #e2e8f0;padding-top:16px;">
-    Sent because you confirmed this address for SecureView reports.
-    <a href="{html.escape(unsub_url)}" style="color:#64748b;">Unsubscribe</a>.<br />
-    {NO_REPLY_NOTE}
-  </p>
-</div></body></html>"""
+          <tr><td style="padding:28px 24px 20px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>{stat("Active time", _fmt_duration(total), 30)}{stat("Sites", sites, 22)}{stat("Top category", esc(top_cat), 48, last=True, nowrap=False)}
+              </tr>
+            </table>
+          </td></tr>
+          {caveat}
+
+          {heading("Time by category")}
+          <tr><td style="padding:4px 24px 8px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{cat_rows}
+            </table>
+          </td></tr>
+
+          {heading("Top sites")}
+          <tr><td style="padding:4px 24px 28px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{dom_rows}
+              {more_note}
+            </table>
+          </td></tr>
+
+          <!-- Install -->
+          <tr><td style="padding:0 24px 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr><td align="center" bgcolor="#EFF6FF" style="background:#EFF6FF;border-radius:12px;padding:20px 16px;font-family:{font};">
+                <div style="font-size:14px;line-height:1.5;color:#1E3A8A;padding-bottom:12px;">Using another computer? Get SecureView there too.</div>
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+                  <tr><td align="center" bgcolor="#2563EB" style="background:#2563EB;border-radius:8px;">
+                    <a href="{esc(INSTALL_URL)}" style="display:inline-block;padding:11px 22px;font-family:{font};font-size:14px;font-weight:600;color:#FFFFFF;text-decoration:none;">Install SecureView for Chrome</a>
+                  </td></tr>
+                </table>
+              </td></tr>
+            </table>
+          </td></tr>
+
+        </table>
+      </td></tr>
+
+      <!-- Footer -->
+      <tr><td align="center" bgcolor="#F8FAFC" style="background:#F8FAFC;border-top:1px solid #E2E8F0;border-radius:0 0 16px 16px;padding:22px 32px 26px;font-family:{font};font-size:12px;line-height:1.7;color:#64748B;">
+        <a href="{esc(INSTALL_URL)}" style="color:#2563EB;text-decoration:none;">Install</a>
+        &nbsp;&middot;&nbsp;
+        <a href="{esc(PRIVACY_URL)}" style="color:#2563EB;text-decoration:none;">Privacy Policy</a>
+        &nbsp;&middot;&nbsp;
+        <a href="{esc(TERMS_URL)}" style="color:#2563EB;text-decoration:none;">Terms</a>
+        &nbsp;&middot;&nbsp;
+        <a href="{esc(SUPPORT_URL)}" style="color:#2563EB;text-decoration:none;">Support</a>
+        <div style="padding-top:12px;">
+          You are receiving this because you confirmed this address for SecureView reports.
+          <a href="{esc(unsub_url)}" style="color:#64748B;text-decoration:underline;">Unsubscribe</a>.
+        </div>
+        <div>This address is not monitored — replies are not read.</div>
+        <div style="padding-top:12px;color:#94A3B8;">&copy; {year} SecureView. All rights reserved.</div>
+      </td></tr>
+
+    </table>
+
+  </td></tr>
+</table>
+</body></html>"""
 
     text_lines = [
         f"SecureView {freq} Report — {period}",
         "",
-        f"Total tracked time: {_fmt_duration(report['totalSeconds'])} across {sites} site{'s' if sites != 1 else ''}.",
+        f"Total tracked time: {_fmt_duration(total)} across {sites} site{'s' if sites != 1 else ''}.",
     ]
     if missing > 0:
         text_lines.append(f"No activity recorded on {missing} of {report['daysCovered']} days.")
@@ -503,7 +692,15 @@ def _render_email(report, unsub_url):
         text_lines.append(f"  {d['hostname']} ({d['category']}): {_fmt_duration(d['seconds'])}")
     if more > 0:
         text_lines.append(f"  and {more} more site{'s' if more != 1 else ''}.")
-    text_lines += ["", f"Unsubscribe: {unsub_url}", NO_REPLY_NOTE_TEXT]
+    text_lines += [
+        "",
+        f"Install SecureView: {INSTALL_URL}",
+        f"Privacy Policy: {PRIVACY_URL}",
+        f"Unsubscribe: {unsub_url}",
+        NO_REPLY_NOTE_TEXT,
+        "",
+        f"(c) {year} SecureView. All rights reserved.",
+    ]
 
     subject = f"SecureView {freq} Report — {period}"
     return subject, html_body, "\n".join(text_lines)
