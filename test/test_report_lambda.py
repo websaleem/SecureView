@@ -12,6 +12,8 @@ Usage:  python3 test/test_report_lambda.py
 """
 import importlib
 import json
+import time
+import re
 import os
 import sys
 import types
@@ -471,6 +473,44 @@ check_true("real hostnames are, lowercased", "github.com (Technology)" in text a
 check_true("an unknown category is dropped", "Totally Made Up" not in text)
 check_true("the client's category total is used", "Technology: 2h" in text)
 check_true("the site count covers sites not listed", "across 60 sites" in text and "and 57 more sites" in text)
+
+print("\n--- the report email: branding, links, and nothing unescaped ---")
+FAKE_SES.sent.clear()
+code, out = call("POST", "/report/send", {"email": "scan@example.com", "clientId": "s" * 32, "report": {
+    "frequency": "weekly", "windowId": "weekly:data_2026_11_02",
+    "startDay": "data_2026_11_02", "endDay": "data_2026_11_08",
+    "daysCovered": 7, "daysPresent": 5, "siteCount": 3,
+    "categories": {"Technology": 5400, "Finance": 1800},
+    "domains": [
+        {"hostname": "github.com", "seconds": 5400, "category": "Technology"},
+        {"hostname": "commbank.com.au", "seconds": 1800, "category": "Finance"},
+    ]}})
+check("the weekly report sends", out.get("status"), "sent")
+mail = FAKE_SES.sent[-1]["Content"]["Simple"]
+h, t = mail["Body"]["Html"]["Data"], mail["Body"]["Text"]["Data"]
+site = "https://secureview.example.com"
+check_true("the logo is an image from our own site, linked to it",
+           f'<img src="{site}/images/email-logo.png"' in h and f'<a href="{site}"' in h)
+check_true("the logo has alt text for clients that block images", 'alt="SecureView"' in h)
+check_true("no image or link points at a third-party host other than the store",
+           all(u.startswith((site, "https://chromewebstore.google.com/"))
+               for u in re.findall(r'(?:src|href)="([^"]+)"', h)))
+check_true("install link goes to the public store listing",
+           "https://chromewebstore.google.com/detail/ojhmodiiehcingcnhlglenenoemmegim" in h)
+check_true("privacy policy is linked", f'href="{site}/privacy.html"' in h)
+check_true("unsubscribe is still there", "/report/unsubscribe?token=" in h)
+check_true("copyright line with the current year",
+           f"&copy; {time.strftime('%Y', time.gmtime())} SecureView. All rights reserved." in h)
+check_true("the text part carries install, privacy and copyright too",
+           "Install SecureView: https://chromewebstore" in t and f"Privacy Policy: {site}/privacy.html" in t
+           and "SecureView. All rights reserved." in t)
+# The extension's own rules say "Finance"; it used to be folded into "Other".
+check_true("a bank matched by the built-in rules keeps its category",
+           "commbank.com.au (Finance)" in t and "Other" not in t)
+check_true("shares are shown", "75%" in h and "25%" in h)
+check_true("the two missing days are called out", "2 of the 7 days" in h)
+check_true("styling is inline — no <style> block or script for a client to strip",
+           "<style" not in h and "<script" not in h)
 
 print("\n--- verification mail is capped across all addresses ---")
 rpt.MAX_VERIFY_EMAILS_GLOBAL_PER_DAY = 2

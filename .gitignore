@@ -34,3 +34,4 @@ deploy.env
 # Key material, in case any ever lands here
 *.pem
 *.key
+preview/
