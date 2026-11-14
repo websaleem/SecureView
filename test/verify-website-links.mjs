@@ -46,6 +46,11 @@ for (const page of pages) {
 
 check('the site has store links at all', found.length > 0, true);
 
+// The source is the production site; the dev deploy rewrites the host. A dev
+// host written into the source would ship to production as-is.
+check('no page names the dev site in source',
+  pages.filter(p => readFileSync(`website/${p}`, 'utf8').includes('dev.secureview.websaleem.com')), []);
+
 // Every link must be in the one shape the rewrite can see. A trailing path, a
 // query string, or the older chrome.google.com/webstore host would all survive
 // the sed untouched and ship production on dev.
